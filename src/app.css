@@ -264,7 +264,9 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 .timeline.contextual > li.descendant {
   padding-bottom: 1em;
 }
-.timeline.contextual > li.descendant:not(.thread) > .status-link {
+.timeline.contextual
+  > li.descendant:not(.thread)
+  > :is(.status-link, .status-focus) {
   padding-left: 40px;
 }
 .timeline.contextual .replies[data-scroll-left]:not([data-scroll-left='0']) {
@@ -292,7 +294,7 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 }
 .timeline.contextual
   > li.descendant.thread
-  > .status-link
+  > :is(.status-link, .status-focus)
   + .replies
   .replies-summary {
   margin-left: calc(
@@ -325,9 +327,9 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 } */
 .timeline.contextual
   > li.descendant.thread
-  > .status-link
+  > :is(.status-link, .status-focus)
   + .replies
-  .status-link {
+  :is(.status-link, .status-focus) {
   padding-left: calc(
     var(--avatar-size) + var(--avatar-margin-start) + var(--avatar-margin-end) +
       (var(--line-margin-end) * (var(--comments-level) - 1))
@@ -358,7 +360,7 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 } */
 .timeline.contextual
   > li.descendant:not(.thread)
-  > .status-link
+  > :is(.status-link, .status-focus)
   + .replies
   .replies-summary {
   margin-left: calc(
@@ -388,9 +390,9 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 } */
 .timeline.contextual
   > li.descendant:not(.thread)
-  > .status-link
+  > :is(.status-link, .status-focus)
   + .replies
-  .status-link {
+  :is(.status-link, .status-focus) {
   padding-left: calc(
     var(--thread-start) + var(--line-margin-end) * var(--comments-level)
   );
@@ -437,7 +439,10 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
     var(--avatar-size) + var(--avatar-margin-start) + var(--avatar-margin-end)
   );
 }
-.timeline.contextual > li.thread > .status-link .replies-link {
+.timeline.contextual
+  > li.thread
+  > :is(.status-link, .status-focus)
+  .replies-link {
   margin-left: calc(
     var(--avatar-size) + var(--avatar-margin-start) + var(--avatar-margin-end)
   );
@@ -654,7 +659,7 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 }
 .timeline:not(.flat)
   > li.timeline-item-diff-author
-  > .status-link
+  > :is(.status-link, .status-focus)
   > .status
   > a
   > .avatar {
@@ -2000,7 +2005,7 @@ ul.link-list li a .icon {
     transform: none;
     pointer-events: auto;
   }
-  #columns li:has(.status-carousel) {
+  #columns li.timeline-item-carousel {
     width: auto;
     transform: none;
   }
@@ -2159,7 +2164,7 @@ ul.link-list li a .icon {
   /* :is(.carousel-top-controls, .carousel-controls) {
     padding: 32px;
   } */
-  li:has(.status-carousel) {
+  li.timeline-item-carousel {
     width: 95vw;
     max-width: calc(320px * 3.3);
     transform: translateX(calc(-50% + 20em));
