@@ -19,9 +19,9 @@ import {
   useRef,
   useState,
 } from 'preact/hooks';
+import { useHotkeys } from 'react-hotkeys-hook';
 import { InView } from 'react-intersection-observer';
 import { useLongPress } from 'use-long-press';
-import useResizeObserver from 'use-resize-observer';
 import { useSnapshot } from 'valtio';
 import { snapshot } from 'valtio/vanilla';
 
@@ -33,6 +33,7 @@ import Modal from '../components/modal';
 import NameText from '../components/name-text';
 import Poll from '../components/poll';
 import { api } from '../utils/api';
+import emojifyText from '../utils/emojify-text';
 import enhanceContent from '../utils/enhance-content';
 import getTranslateTargetLanguage from '../utils/get-translate-target-language';
 import getHTMLText from '../utils/getHTMLText';
@@ -47,12 +48,14 @@ import showToast from '../utils/show-toast';
 import states, { getStatus, saveStatus, statusKey } from '../utils/states';
 import statusPeek from '../utils/status-peek';
 import store from '../utils/store';
+import useTruncated from '../utils/useTruncated';
 import visibilityIconsMap from '../utils/visibility-icons-map';
 
 import Avatar from './avatar';
 import Icon from './icon';
 import Link from './link';
 import Media from './media';
+import { isMediaCaptionLong } from './media';
 import MenuLink from './menu-link';
 import RelativeTime from './relative-time';
 import TranslationBlock from './translation-block';
@@ -136,6 +139,7 @@ function Status({
       username,
       emojis: accountEmojis,
       bot,
+      group,
     },
     id,
     repliesCount,
@@ -226,10 +230,34 @@ function Status({
     inReplyToAccountId === currentAccount ||
     mentions?.find((mention) => mention.id === currentAccount);
 
-  const showSpoiler = previewMode || !!snapStates.spoilers[id] || false;
+  const readingExpandSpoilers = useMemo(() => {
+    const prefs = store.account.get('preferences') || {};
+    return !!prefs['reading:expand:spoilers'];
+  }, []);
+  const showSpoiler =
+    previewMode || readingExpandSpoilers || !!snapStates.spoilers[id] || false;
 
   if (reblog) {
     // If has statusID, means useItemID (cached in states)
+
+    if (group) {
+      return (
+        <div class="status-group" onMouseEnter={debugHover}>
+          <div class="status-pre-meta">
+            <Icon icon="group" size="l" alt="Group" />{' '}
+            <NameText account={status.account} instance={instance} showAvatar />
+          </div>
+          <Status
+            status={statusID ? null : reblog}
+            statusID={statusID ? reblog.id : null}
+            instance={instance}
+            size={size}
+            contentTextWeight={contentTextWeight}
+          />
+        </div>
+      );
+    }
+
     return (
       <div class="status-reblog" onMouseEnter={debugHover}>
         <div class="status-pre-meta">
@@ -292,40 +320,9 @@ function Status({
   const [showEdited, setShowEdited] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
 
-  const spoilerContentRef = useRef(null);
-  useResizeObserver({
-    ref: spoilerContentRef,
-    onResize: () => {
-      if (spoilerContentRef.current) {
-        const { scrollHeight, clientHeight } = spoilerContentRef.current;
-        if (scrollHeight < window.innerHeight * 0.4) {
-          spoilerContentRef.current.classList.remove('truncated');
-        } else {
-          spoilerContentRef.current.classList.toggle(
-            'truncated',
-            scrollHeight > clientHeight,
-          );
-        }
-      }
-    },
-  });
-  const contentRef = useRef(null);
-  useResizeObserver({
-    ref: contentRef,
-    onResize: () => {
-      if (contentRef.current) {
-        const { scrollHeight, clientHeight } = contentRef.current;
-        if (scrollHeight < window.innerHeight * 0.4) {
-          contentRef.current.classList.remove('truncated');
-        } else {
-          contentRef.current.classList.toggle(
-            'truncated',
-            scrollHeight > clientHeight,
-          );
-        }
-      }
-    },
-  });
+  const spoilerContentRef = useTruncated();
+  const contentRef = useTruncated();
+  const mediaContainerRef = useTruncated();
   const readMoreText = 'Read more →';
 
   const statusRef = useRef(null);
@@ -487,7 +484,7 @@ function Status({
   };
 
   const differentLanguage =
-    language &&
+    !!language &&
     language !== targetLanguage &&
     !localeMatch([language], [targetLanguage]) &&
     !contentTranslationHideLanguages.find(
@@ -529,7 +526,9 @@ function Status({
           </MenuHeader>
           <MenuLink
             to={instance ? `/${instance}/s/${id}` : `/s/${id}`}
-            onClick={onStatusLinkClick}
+            onClick={(e) => {
+              onStatusLinkClick(e, status);
+            }}
           >
             <Icon icon="arrow-right" />
             <span>View post by @{username || acct}</span>
@@ -601,8 +600,9 @@ function Status({
               onClick={() => {
                 try {
                   favouriteStatus();
-                  if (!isSizeLarge)
+                  if (!isSizeLarge) {
                     showToast(favourited ? 'Unfavourited' : 'Favourited');
+                  }
                 } catch (e) {}
               }}
             >
@@ -624,8 +624,9 @@ function Status({
               onClick={() => {
                 try {
                   bookmarkStatus();
-                  if (!isSizeLarge)
+                  if (!isSizeLarge) {
                     showToast(bookmarked ? 'Unbookmarked' : 'Bookmarked');
+                  }
                 } catch (e) {}
               }}
             >
@@ -789,35 +790,110 @@ function Status({
     x: 0,
     y: 0,
   });
+  const isIOS =
+    window.ontouchstart !== undefined &&
+    /iPad|iPhone|iPod/.test(navigator.userAgent);
+  // Only iOS/iPadOS browsers don't support contextmenu
+  // Some comments report iPadOS might support contextmenu if a mouse is connected
   const bindLongPressContext = useLongPress(
-    (e) => {
-      const { clientX, clientY } = e.touches?.[0] || e;
-      // link detection copied from onContextMenu because here it works
-      const link = e.target.closest('a');
-      if (link && /^https?:\/\//.test(link.getAttribute('href'))) return;
-      e.preventDefault();
-      setContextMenuAnchorPoint({
-        x: clientX,
-        y: clientY,
-      });
-      setIsContextMenuOpen(true);
-    },
+    isIOS
+      ? (e) => {
+          if (e.pointerType === 'mouse') return;
+          // There's 'pen' too, but not sure if contextmenu event would trigger from a pen
+
+          const { clientX, clientY } = e.touches?.[0] || e;
+          // link detection copied from onContextMenu because here it works
+          const link = e.target.closest('a');
+          if (link && /^https?:\/\//.test(link.getAttribute('href'))) return;
+          e.preventDefault();
+          setContextMenuAnchorPoint({
+            x: clientX,
+            y: clientY,
+          });
+          setIsContextMenuOpen(true);
+        }
+      : null,
     {
       threshold: 600,
       captureEvent: true,
       detect: 'touch',
-      cancelOnMovement: 4, // true allows movement of up to 25 pixels
+      cancelOnMovement: 2, // true allows movement of up to 25 pixels
     },
   );
 
   const showContextMenu = size !== 'l' && !previewMode && !_deleted && !quoted;
 
+  const hotkeysEnabled = !readOnly && !previewMode;
+  const rRef = useHotkeys('r', replyStatus, {
+    enabled: hotkeysEnabled,
+  });
+  const fRef = useHotkeys(
+    'f',
+    () => {
+      try {
+        favouriteStatus();
+        if (!isSizeLarge) {
+          showToast(favourited ? 'Unfavourited' : 'Favourited');
+        }
+      } catch (e) {}
+    },
+    {
+      enabled: hotkeysEnabled,
+    },
+  );
+  const dRef = useHotkeys(
+    'd',
+    () => {
+      try {
+        bookmarkStatus();
+        if (!isSizeLarge) {
+          showToast(bookmarked ? 'Unbookmarked' : 'Bookmarked');
+        }
+      } catch (e) {}
+    },
+    {
+      enabled: hotkeysEnabled,
+    },
+  );
+  const bRef = useHotkeys(
+    'shift+b',
+    () => {
+      (async () => {
+        try {
+          const done = await confirmBoostStatus();
+          if (!isSizeLarge && done) {
+            showToast(reblogged ? 'Unboosted' : 'Boosted');
+          }
+        } catch (e) {}
+      })();
+    },
+    {
+      enabled: hotkeysEnabled && canBoost,
+    },
+  );
+
   return (
     <article
-      ref={statusRef}
+      ref={(node) => {
+        statusRef.current = node;
+        // Use parent node if it's in focus
+        // Use case: <a><status /></a>
+        // When navigating (j/k), the <a> is focused instead of <status />
+        // Hotkey binding doesn't bubble up thus this hack
+        const nodeRef =
+          node?.closest?.(
+            '.timeline-item, .timeline-item-alt, .status-link, .status-focus',
+          ) || node;
+        rRef.current = nodeRef;
+        fRef.current = nodeRef;
+        dRef.current = nodeRef;
+        bRef.current = nodeRef;
+      }}
       tabindex="-1"
       class={`status ${
-        !withinContext && inReplyToAccount ? 'status-reply-to' : ''
+        !withinContext && inReplyToId && inReplyToAccount
+          ? 'status-reply-to'
+          : ''
       } visibility-${visibility} ${_pinned ? 'status-pinned' : ''} ${
         {
           s: 'small',
@@ -848,10 +924,12 @@ function Status({
           state={isContextMenuOpen ? 'open' : undefined}
           anchorPoint={contextMenuAnchorPoint}
           direction="right"
-          onClose={() => {
+          onClose={(e) => {
             setIsContextMenuOpen(false);
             // statusRef.current?.focus?.();
-            statusRef.current?.closest('[tabindex]')?.focus?.();
+            if (e?.reason === 'click') {
+              statusRef.current?.closest('[tabindex]')?.focus?.();
+            }
           }}
           portal={{
             target: document.body,
@@ -900,13 +978,14 @@ function Status({
       )}
       <div class="container">
         <div class="meta">
-          {/* <span> */}
-          <NameText
-            account={status.account}
-            instance={instance}
-            showAvatar={size === 's'}
-            showAcct={isSizeLarge}
-          />
+          <span class="meta-name">
+            <NameText
+              account={status.account}
+              instance={instance}
+              showAvatar={size === 's'}
+              showAcct={isSizeLarge}
+            />
+          </span>
           {/* {inReplyToAccount && !withinContext && size !== 's' && (
               <>
                 {' '}
@@ -948,7 +1027,7 @@ function Status({
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      onStatusLinkClick?.();
+                      onStatusLinkClick?.(e, status);
                     }}
                     class={`time ${open ? 'is-open' : ''}`}
                   >
@@ -981,7 +1060,7 @@ function Status({
         )}
         {!withinContext && (
           <>
-            {inReplyToAccountId === status.account?.id ||
+            {(!!inReplyToId && inReplyToAccountId === status.account?.id) ||
             !!snapStates.statusThreadNumber[sKey] ? (
               <div class="status-thread-badge">
                 <Icon icon="thread" size="s" />
@@ -1023,7 +1102,7 @@ function Status({
           {!!spoilerText && (
             <>
               <div
-                class="content"
+                class="content spoiler-content"
                 lang={language}
                 dir="auto"
                 ref={spoilerContentRef}
@@ -1036,6 +1115,7 @@ function Status({
               <button
                 class={`light spoiler ${showSpoiler ? 'spoiling' : ''}`}
                 type="button"
+                disabled={readingExpandSpoilers}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -1047,19 +1127,25 @@ function Status({
                 }}
               >
                 <Icon icon={showSpoiler ? 'eye-open' : 'eye-close'} />{' '}
-                {showSpoiler ? 'Show less' : 'Show more'}
+                {readingExpandSpoilers
+                  ? 'Content warning'
+                  : showSpoiler
+                  ? 'Show less'
+                  : 'Show more'}
               </button>
             </>
           )}
-          <div
-            class="content"
-            lang={language}
-            dir="auto"
-            ref={contentRef}
-            data-read-more={readMoreText}
-          >
+          <div class="content" ref={contentRef} data-read-more={readMoreText}>
             <div
-              onClick={handleContentLinks({ mentions, instance, previewMode })}
+              lang={language}
+              dir="auto"
+              class="inner-content"
+              onClick={handleContentLinks({
+                mentions,
+                instance,
+                previewMode,
+                statusURL: url,
+              })}
               dangerouslySetInnerHTML={{
                 __html: enhanceContent(content, {
                   emojis,
@@ -1136,6 +1222,7 @@ function Status({
           )}
           {(((enableTranslate || inlineTranslate) &&
             !!content.trim() &&
+            !!getHTMLText(emojifyText(content, emojis)) &&
             differentLanguage) ||
             forceTranslate) && (
             <TranslationBlock
@@ -1147,7 +1234,14 @@ function Status({
                 getHTMLText(content) +
                 (poll?.options?.length
                   ? `\n\nPoll:\n${poll.options
-                      .map((option) => `- ${option.title}`)
+                      .map(
+                        (option) =>
+                          `- ${option.title}${
+                            option.votesCount >= 0
+                              ? ` (${option.votesCount})`
+                              : ''
+                          }`,
+                      )
                       .join('\n')}`
                   : '')
               }
@@ -1172,31 +1266,74 @@ function Status({
             </button>
           )}
           {!!mediaAttachments.length && (
-            <div
-              class={`media-container media-eq${mediaAttachments.length} ${
-                mediaAttachments.length > 2 ? 'media-gt2' : ''
-              } ${mediaAttachments.length > 4 ? 'media-gt4' : ''}`}
+            <MultipleMediaFigure
+              lang={language}
+              enabled={
+                mediaAttachments.length > 1 &&
+                mediaAttachments.some(
+                  (media) =>
+                    !!media.description &&
+                    !isMediaCaptionLong(media.description),
+                )
+              }
+              captionChildren={() => {
+                return mediaAttachments.map(
+                  (media, i) =>
+                    !!media.description &&
+                    !isMediaCaptionLong(media.description) && (
+                      <div
+                        key={media.id}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          states.showMediaAlt = {
+                            alt: media.description,
+                            lang: language,
+                          };
+                        }}
+                        title={media.description}
+                      >
+                        <sup>{i + 1}</sup> {media.description}
+                      </div>
+                    ),
+                );
+              }}
             >
-              {mediaAttachments
-                .slice(0, isSizeLarge ? undefined : 4)
-                .map((media, i) => (
-                  <Media
-                    key={media.id}
-                    media={media}
-                    autoAnimate={isSizeLarge}
-                    to={`/${instance}/s/${id}?${
-                      withinContext ? 'media' : 'media-only'
-                    }=${i + 1}`}
-                    onClick={
-                      onMediaClick
-                        ? (e) => {
-                            onMediaClick(e, i, media, status);
-                          }
-                        : undefined
-                    }
-                  />
-                ))}
-            </div>
+              <div
+                ref={mediaContainerRef}
+                class={`media-container media-eq${mediaAttachments.length} ${
+                  mediaAttachments.length > 2 ? 'media-gt2' : ''
+                } ${mediaAttachments.length > 4 ? 'media-gt4' : ''}`}
+              >
+                {mediaAttachments
+                  .slice(0, isSizeLarge ? undefined : 4)
+                  .map((media, i) => (
+                    <Media
+                      key={media.id}
+                      media={media}
+                      autoAnimate={isSizeLarge}
+                      showCaption={mediaAttachments.length === 1}
+                      lang={language}
+                      altIndex={
+                        mediaAttachments.length > 1 &&
+                        !!media.description &&
+                        !isMediaCaptionLong(media.description) &&
+                        i + 1
+                      }
+                      to={`/${instance}/s/${id}?${
+                        withinContext ? 'media' : 'media-only'
+                      }=${i + 1}`}
+                      onClick={
+                        onMediaClick
+                          ? (e) => {
+                              onMediaClick(e, i, media, status);
+                            }
+                          : undefined
+                      }
+                    />
+                  ))}
+              </div>
+            </MultipleMediaFigure>
           )}
           {!!card &&
             card?.url !== status.url &&
@@ -1221,7 +1358,7 @@ function Status({
                     icon={visibilityIconsMap[visibility]}
                     alt={visibilityText[visibility]}
                   />{' '}
-                  <a href={url} target="_blank">
+                  <a href={url} target="_blank" rel="noopener noreferrer">
                     <time
                       class="created"
                       datetime={createdAtDate.toISOString()}
@@ -1393,6 +1530,19 @@ function Status({
   );
 }
 
+function MultipleMediaFigure(props) {
+  const { enabled, children, lang, captionChildren } = props;
+  if (!enabled || !captionChildren) return children;
+  return (
+    <figure class="media-figure-multiple">
+      {children}
+      <figcaption lang={lang} dir="auto">
+        {captionChildren?.()}
+      </figcaption>
+    </figure>
+  );
+}
+
 function Card({ card, instance }) {
   const snapStates = useSnapshot(states);
   const {
@@ -1408,6 +1558,7 @@ function Card({ card, instance }) {
     url,
     type,
     embedUrl,
+    language,
   } = card;
 
   /* type
@@ -1449,7 +1600,7 @@ function Card({ card, instance }) {
 
   if (snapStates.unfurledLinks[url]) return null;
 
-  if (hasText && (image || (!type !== 'photo' && blurhash))) {
+  if (hasText && (image || (type === 'photo' && blurhash))) {
     const domain = new URL(url).hostname.replace(/^www\./, '');
     let blurhashImage;
     if (!image) {
@@ -1471,6 +1622,8 @@ function Card({ card, instance }) {
         target={cardStatusURL ? null : '_blank'}
         rel="nofollow noopener noreferrer"
         class={`card link ${blurhashImage ? '' : size}`}
+        lang={language}
+        dir="auto"
       >
         <div class="card-image">
           <img
@@ -1487,9 +1640,15 @@ function Card({ card, instance }) {
           />
         </div>
         <div class="meta-container">
-          <p class="meta domain">{domain}</p>
-          <p class="title">{title}</p>
-          <p class="meta">{description || providerName || authorName}</p>
+          <p class="meta domain" dir="auto">
+            {domain}
+          </p>
+          <p class="title" dir="auto">
+            {title}
+          </p>
+          <p class="meta" dir="auto">
+            {description || providerName || authorName}
+          </p>
         </div>
       </a>
     );
@@ -1539,9 +1698,12 @@ function Card({ card, instance }) {
         target={cardStatusURL ? null : '_blank'}
         rel="nofollow noopener noreferrer"
         class={`card link no-image`}
+        lang={language}
       >
         <div class="meta-container">
-          <p class="meta domain">{domain}</p>
+          <p class="meta domain">
+            <Icon icon="link" size="s" /> <span>{domain}</span>
+          </p>
           <p class="title">{title}</p>
           <p class="meta">{description || providerName || authorName}</p>
         </div>
@@ -1972,7 +2134,7 @@ const unfurlMastodonLink = throttle(
 
 function FilteredStatus({ status, filterInfo, instance, containerProps = {} }) {
   const {
-    account: { avatar, avatarStatic, bot },
+    account: { avatar, avatarStatic, bot, group },
     createdAt,
     visibility,
     reblog,
@@ -1991,13 +2153,15 @@ function FilteredStatus({ status, filterInfo, instance, containerProps = {} }) {
       threshold: 600,
       captureEvent: true,
       detect: 'touch',
-      cancelOnMovement: 4, // true allows movement of up to 25 pixels
+      cancelOnMovement: 2, // true allows movement of up to 25 pixels
     },
   );
 
+  const statusPeekRef = useTruncated();
+
   return (
     <div
-      class={isReblog ? 'status-reblog' : ''}
+      class={isReblog ? (group ? 'status-group' : 'status-reblog') : ''}
       {...containerProps}
       title={statusPeekText}
       onContextMenu={(e) => {
@@ -2068,16 +2232,15 @@ function FilteredStatus({ status, filterInfo, instance, containerProps = {} }) {
             </header>
             <main tabIndex="-1">
               <Link
+                ref={statusPeekRef}
                 class="status-link"
                 to={`/${instance}/s/${status.id}`}
                 onClick={() => {
                   setShowPeek(false);
                 }}
+                data-read-more="Read more →"
               >
                 <Status status={status} instance={instance} size="s" readOnly />
-                <button type="button" class="status-post-link plain3">
-                  See post &raquo;
-                </button>
               </Link>
             </main>
           </div>
@@ -2105,6 +2268,7 @@ const QuoteStatuses = memo(({ id, instance, level = 0 }) => {
         key={q.instance + q.id}
         to={`${q.instance ? `/${q.instance}` : ''}/s/${q.id}`}
         class="status-card-link"
+        data-read-more="Read more →"
       >
         <Status
           statusID={q.id}

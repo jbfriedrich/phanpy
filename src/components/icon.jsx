@@ -8,11 +8,12 @@ const SIZES = {
   xxl: 32,
 };
 
-const ICONS = {
+export const ICONS = {
   x: () => import('@iconify-icons/mingcute/close-line'),
   heart: () => import('@iconify-icons/mingcute/heart-line'),
   bookmark: () => import('@iconify-icons/mingcute/bookmark-line'),
   'check-circle': () => import('@iconify-icons/mingcute/check-circle-line'),
+  'x-circle': () => import('@iconify-icons/mingcute/close-circle-line'),
   transfer: () => import('@iconify-icons/mingcute/transfer-4-line'),
   rocket: () => import('@iconify-icons/mingcute/rocket-line'),
   'arrow-left': () => import('@iconify-icons/mingcute/arrow-left-line'),
@@ -44,6 +45,7 @@ const ICONS = {
   plus: () => import('@iconify-icons/mingcute/add-circle-line'),
   'chevron-left': () => import('@iconify-icons/mingcute/left-line'),
   'chevron-right': () => import('@iconify-icons/mingcute/right-line'),
+  'chevron-down': () => import('@iconify-icons/mingcute/down-line'),
   reply: [
     () => import('@iconify-icons/mingcute/share-forward-line'),
     '180deg',
@@ -88,6 +90,16 @@ const ICONS = {
   layout5: () => import('@iconify-icons/mingcute/layout-5-line'),
   announce: () => import('@iconify-icons/mingcute/announcement-line'),
   alert: () => import('@iconify-icons/mingcute/alert-line'),
+  round: () => import('@iconify-icons/mingcute/round-fill'),
+  'arrow-up-circle': () =>
+    import('@iconify-icons/mingcute/arrow-up-circle-line'),
+  'arrow-down-circle': () =>
+    import('@iconify-icons/mingcute/arrow-down-circle-line'),
+  clipboard: () => import('@iconify-icons/mingcute/clipboard-line'),
+  'account-edit': () => import('@iconify-icons/mingcute/user-edit-line'),
+  'account-warning': () => import('@iconify-icons/mingcute/user-warning-line'),
+  keyboard: () => import('@iconify-icons/mingcute/keyboard-line'),
+  cloud: () => import('@iconify-icons/mingcute/cloud-line'),
 };
 
 function Icon({
@@ -114,7 +126,7 @@ function Icon({
   }, [iconBlock]);
 
   return (
-    <div
+    <span
       class={`icon ${className}`}
       title={title || alt}
       style={{
@@ -139,7 +151,7 @@ function Icon({
           }}
         />
       )}
-    </div>
+    </span>
   );
 }
 

@@ -1,4 +1,4 @@
-import { Menu, MenuItem } from '@szhsin/react-menu';
+import { Menu } from '@szhsin/react-menu';
 import { getBlurHashAverageColor } from 'fast-blurhash';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -6,14 +6,15 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import Icon from './icon';
 import Link from './link';
 import Media from './media';
+import MediaAltModal from './media-alt-modal';
 import MenuLink from './menu-link';
 import Modal from './modal';
-import TranslationBlock from './translation-block';
 
 function MediaModal({
   mediaAttachments,
   statusID,
   instance,
+  lang,
   index = 0,
   onClose = () => {},
 }) {
@@ -44,6 +45,7 @@ function MediaModal({
       left: scrollLeft,
       behavior: differentStatusID ? 'auto' : 'smooth',
     });
+    carouselRef.current.focus();
   }, [index, statusID]);
 
   const [showControls, setShowControls] = useState(true);
@@ -95,7 +97,7 @@ function MediaModal({
     <div class="media-modal-container">
       <div
         ref={carouselRef}
-        tabIndex="-1"
+        tabIndex="0"
         data-swipe-threshold="44"
         class="carousel"
         onClick={(e) => {
@@ -134,17 +136,22 @@ function MediaModal({
               {!!media.description && (
                 <button
                   type="button"
-                  class="plain2 media-alt"
+                  class="media-alt"
                   hidden={!showControls}
                   onClick={() => {
-                    setShowMediaAlt(media.description);
+                    setShowMediaAlt({
+                      alt: media.description,
+                      lang,
+                    });
                   }}
                 >
-                  <Icon icon="info" />
-                  <span class="media-alt-desc">{media.description}</span>
+                  <span class="alt-badge">ALT</span>
+                  <span class="media-alt-desc" lang={lang} dir="auto">
+                    {media.description}
+                  </span>
                 </button>
               )}
-              <Media media={media} showOriginal />
+              <Media media={media} showOriginal lang={lang} />
             </div>
           );
         })}
@@ -153,7 +160,7 @@ function MediaModal({
         <span>
           <button
             type="button"
-            class="carousel-button plain3"
+            class="carousel-button"
             onClick={() => onClose()}
           >
             <Icon icon="x" />
@@ -166,9 +173,7 @@ function MediaModal({
                 key={media.id}
                 type="button"
                 disabled={i === currentIndex}
-                class={`plain3 carousel-dot ${
-                  i === currentIndex ? 'active' : ''
-                }`}
+                class={`carousel-dot ${i === currentIndex ? 'active' : ''}`}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -176,9 +181,10 @@ function MediaModal({
                     left: carouselRef.current.clientWidth * i,
                     behavior: 'smooth',
                   });
+                  carouselRef.current.focus();
                 }}
               >
-                &bull;
+                <Icon icon="round" size="s" />
               </button>
             ))}
           </span>
@@ -194,7 +200,7 @@ function MediaModal({
             gap={4}
             menuClassName="glass-menu"
             menuButton={
-              <button type="button" class="carousel-button plain3">
+              <button type="button" class="carousel-button">
                 <Icon icon="more" alt="More" />
               </button>
             }
@@ -204,7 +210,7 @@ function MediaModal({
                 mediaAttachments[currentIndex]?.remoteUrl ||
                 mediaAttachments[currentIndex]?.url
               }
-              class="carousel-button plain3"
+              class="carousel-button"
               target="_blank"
               title="Open original media in new window"
             >
@@ -218,7 +224,7 @@ function MediaModal({
                 ? `?media=${currentIndex + 1}`
                 : ''
             }`}
-            class="button carousel-button media-post-link plain3"
+            class="button carousel-button media-post-link"
             // onClick={() => {
             //   // if small screen (not media query min-width 40em + 350px), run onClose
             //   if (
@@ -236,11 +242,12 @@ function MediaModal({
         <div class="carousel-controls" hidden={!showControls}>
           <button
             type="button"
-            class="carousel-button plain3"
+            class="carousel-button"
             hidden={currentIndex === 0}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              carouselRef.current.focus();
               carouselRef.current.scrollTo({
                 left: carouselRef.current.clientWidth * (currentIndex - 1),
                 behavior: 'smooth',
@@ -251,11 +258,12 @@ function MediaModal({
           </button>
           <button
             type="button"
-            class="carousel-button plain3"
+            class="carousel-button"
             hidden={currentIndex === mediaAttachments.length - 1}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              carouselRef.current.focus();
               carouselRef.current.scrollTo({
                 left: carouselRef.current.clientWidth * (currentIndex + 1),
                 behavior: 'smooth',
@@ -272,63 +280,17 @@ function MediaModal({
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setShowMediaAlt(false);
+              carouselRef.current.focus();
             }
           }}
         >
           <MediaAltModal
-            alt={showMediaAlt}
+            alt={showMediaAlt.alt || showMediaAlt}
+            lang={showMediaAlt?.lang}
             onClose={() => setShowMediaAlt(false)}
           />
         </Modal>
       )}
-    </div>
-  );
-}
-
-function MediaAltModal({ alt, onClose }) {
-  const [forceTranslate, setForceTranslate] = useState(false);
-  return (
-    <div class="sheet">
-      {!!onClose && (
-        <button type="button" class="sheet-close outer" onClick={onClose}>
-          <Icon icon="x" />
-        </button>
-      )}
-      <header class="header-grid">
-        <h2>Media description</h2>
-        <div class="header-side">
-          <Menu
-            align="end"
-            menuButton={
-              <button type="button" class="plain4">
-                <Icon icon="more" alt="More" size="xl" />
-              </button>
-            }
-          >
-            <MenuItem
-              disabled={forceTranslate}
-              onClick={() => {
-                setForceTranslate(true);
-              }}
-            >
-              <Icon icon="translate" />
-              <span>Translate</span>
-            </MenuItem>
-          </Menu>
-        </div>
-      </header>
-      <main>
-        <p
-          style={{
-            whiteSpace: 'pre-wrap',
-          }}
-        >
-          {alt}
-        </p>
-        {forceTranslate && (
-          <TranslationBlock forceTranslate={forceTranslate} text={alt} />
-        )}
-      </main>
     </div>
   );
 }

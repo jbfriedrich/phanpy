@@ -24,11 +24,16 @@ const states = proxy({
   notificationsLastFetchTime: null,
   accounts: {},
   reloadStatusPage: 0,
+  reloadGenericAccounts: {
+    id: null,
+    counter: 0,
+  },
   spoilers: {},
   scrollPositions: {},
   unfurledLinks: {},
   statusQuotes: {},
   accounts: {},
+  routeNotification: null,
   // Modals
   showCompose: false,
   showSettings: false,
@@ -37,6 +42,9 @@ const states = proxy({
   showDrafts: false,
   showMediaModal: false,
   showShortcutsSettings: false,
+  showKeyboardShortcutsHelp: false,
+  showGenericAccounts: false,
+  showMediaAlt: false,
   // Shortcuts
   shortcuts: store.account.get('shortcuts') ?? [],
   // Settings
@@ -59,6 +67,30 @@ const states = proxy({
 });
 
 export default states;
+
+export function initStates() {
+  // init all account based states
+  // all keys that uses store.account.get() should be initialized here
+  states.notificationsLast = store.account.get('notificationsLast') || null;
+  states.shortcuts = store.account.get('shortcuts') ?? [];
+  states.settings.autoRefresh =
+    store.account.get('settings-autoRefresh') ?? false;
+  states.settings.shortcutsViewMode =
+    store.account.get('settings-shortcutsViewMode') ?? null;
+  states.settings.shortcutsColumnsMode =
+    store.account.get('settings-shortcutsColumnsMode') ?? false;
+  states.settings.boostsCarousel =
+    store.account.get('settings-boostsCarousel') ?? true;
+  states.settings.contentTranslation =
+    store.account.get('settings-contentTranslation') ?? true;
+  states.settings.contentTranslationTargetLanguage =
+    store.account.get('settings-contentTranslationTargetLanguage') || null;
+  states.settings.contentTranslationHideLanguages =
+    store.account.get('settings-contentTranslationHideLanguages') || [];
+  states.settings.contentTranslationAutoInline =
+    store.account.get('settings-contentTranslationAutoInline') ?? false;
+  states.settings.cloakMode = store.account.get('settings-cloakMode') ?? false;
+}
 
 subscribeKey(states, 'notificationsLast', (v) => {
   console.log('CHANGE', v);
@@ -112,6 +144,9 @@ export function hideAllModals() {
   states.showDrafts = false;
   states.showMediaModal = false;
   states.showShortcutsSettings = false;
+  states.showKeyboardShortcutsHelp = false;
+  states.showGenericAccounts = false;
+  states.showMediaAlt = false;
 }
 
 export function statusKey(id, instance) {

@@ -7,7 +7,7 @@ Phanpy
 **Minimalistic opinionated Mastodon web client.**
 </div>
 
-<br>
+![Fancy screenshot](readme-assets/fancy-screenshot.jpg)
 
 **🗣️ Pronunciation**: [`/fænpi/`](https://ythi.net/how-do-you-pronounce/phanpy/english/) ([`FAN-pee`](https://www.smogon.com/forums/threads/the-official-name-pronunciation-guide.3474941/)) [🔊 Listen](https://www.youtube.com/watch?v=DIUbWe-ysJI)
 
@@ -74,6 +74,18 @@ Everything is designed and engineered following my taste and vision. This is a p
 - Limit up to 3 API requests as the root post may be very old or the thread is super long.
 - If index number couldn't be found, badge will fallback to showing `Thread` without the number.
 
+### Hashtag stuffing collapsing
+
+![Hashtag stuffing collapsing](readme-assets/hashtag-stuffing-collapsing.jpg)
+
+- First paragraph of post content with more than 3 hashtags will be collapsed to max 3 lines.
+- Subsequent paragraphs after first paragraph with more than 3 hashtags will be collapsed to 1 line.
+- Adjacent paragraphs with more than 1 hashtag after collapsed paragraphs will be collapsed to 1 line.
+- If there are text around or between the hashtags, they will not be collapsed.
+- Collapsed hashtags will be appended with `...` at the end.
+- They are also slightly faded out to reduce visual noise.
+- Opening the post view will reveal the hashtags uncollapsed.
+
 ### Filtered posts
 
 - "Hide completely"-filtered posts will be hidden, with no UI to reveal it.
@@ -81,7 +93,7 @@ Everything is designed and engineered following my taste and vision. This is a p
   - Content can be partially revealed by hovering over the post, with tooltip showing the post text.
   - Clicking it will open the Post page.
   - Long-pressing or right-clicking it will "peek" the post with a bottom sheet UI.
-  - On boosts carousel, they are not partially hidden, but sorted to the end of the carousel.
+  - On boosts carousel, they are sorted to the end of the carousel.
 
 ## Development
 
@@ -97,7 +109,7 @@ Prerequisites: Node.js 18+
 
 ## Self-hosting
 
-This is a **pure static web app**. You can host it anywhere you want. Build it by running `npm run build` and serve the `dist` folder.
+This is a **pure static web app**. You can host it anywhere you want. Build it by running `npm run build` (after `npm install`) and serve the `dist` folder.
 
 Try search for "how to self-host static sites" as there are many ways to do it.
 
@@ -112,6 +124,14 @@ Try search for "how to self-host static sites" as there are many ways to do it.
 - Vanilla CSS - *Yes, I'm old school.*
 
 Some of these may change in the future. The front-end world is ever-changing.
+
+## Costs
+
+Costs involved in running and developing this web app:
+
+- Domain name (.social): **USD$23.18/year** (USD$6.87 1st year)
+- Hosting: Free
+- Development, design, maintenance: "Free" (My precious time)
 
 ## Mascot
 
@@ -135,17 +155,20 @@ And here I am. Building a Mastodon web client.
 
 ## Alternative web clients
 
-- [Pinafore](https://pinafore.social/) ([retired](https://nolanlawson.com/2023/01/09/retiring-pinafore/)) → [Semaphore](https://semaphore.social/)
+- [Pinafore](https://pinafore.social/) ([retired](https://nolanlawson.com/2023/01/09/retiring-pinafore/)) - forks ↓
+  - [Semaphore](https://semaphore.social/)
+  - [Enafore](https://enafore.social/)
 - [Cuckoo+](https://www.cuckoo.social/)
 - [Sengi](https://nicolasconstant.github.io/sengi/)
 - [Soapbox](https://fe.soapbox.pub/)
-- [Elk](https://elk.zone/)
-  - Fork https://elk.fedified.com/
+- [Elk](https://elk.zone/) - forks ↓
+  - [elk.fedified.com](https://elk.fedified.com/)
 - [Mastodeck](https://mastodeck.com/)
 - [Trunks](https://trunks.social/)
 - [Tooty](https://github.com/n1k0/tooty)
 - [Litterbox](https://litterbox.koyu.space/)
 - [Statuzer](https://statuzer.com/)
+- [Tusked](https://tusked.app/)
 - [More...](https://github.com/hueyy/awesome-mastodon/#clients)
 
 ## 💁‍♂️ Notice to all other social media client developers

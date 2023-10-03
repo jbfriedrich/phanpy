@@ -717,6 +717,14 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
   animation: appear 0.2s ease-out;
   -webkit-touch-callout: none;
 }
+@media (pointer: coarse) {
+  .status-focus:not(.hero .status-focus) {
+    /* Only the hero doesn't have context menu */
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+}
 :is(.status-link, .status-focus):is(:focus, .is-active) {
   background-color: var(--link-bg-hover-color);
   outline-offset: -2px;
@@ -739,6 +747,7 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
     transparent 150%
   );
   position: relative;
+  container-type: inline-size;
 }
 .status-carousel:after {
   content: '';
@@ -779,6 +788,7 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
   gap: 16px;
   align-items: flex-start;
   counter-reset: index;
+  min-height: 160px;
 }
 .status-carousel > ul > li {
   scroll-snap-align: center;
@@ -798,7 +808,18 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 .status-carousel > ul > li:is(:empty, :has(> a:empty)) {
   display: none;
 }
-@media (hover: hover) or (pointer: fine) or (min-width: 40em) {
+/*
+  Assume that browsers that do support inline-size property also support container queries.
+  https://www.smashingmagazine.com/2021/05/css-container-queries-use-cases-migration-strategies/#progressive-enhancement-polyfills
+*/
+@supports not (contain: inline-size) {
+  @media (hover: hover) or (pointer: fine) or (min-width: 40em) {
+    .status-carousel > ul {
+      scroll-snap-type: none;
+    }
+  }
+}
+@container (min-width: 640px) {
   .status-carousel > ul {
     scroll-snap-type: none;
   }
@@ -806,14 +827,14 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 .status-carousel .content-container .content:only-child {
   font-size: calc(100% + 25% * max(2 - var(--content-text-weight), 0));
 }
-.status-carousel
+/* .status-carousel
   .content-container[data-content-text-weight='1']
   .media-container.media-eq1 {
-  /* LOL, this is madness, reading a value from the style attribute */
+  /* LOL, this is madness, reading a value from the style attribute * /
   height: auto;
   min-height: 160px;
   max-height: max(160px, 50vh);
-}
+} */
 .status-carousel.boosts-carousel {
   --carousel-color: var(--reblog-color);
   --carousel-faded-color: var(--reblog-faded-color);
@@ -905,7 +926,8 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
     display: flex;
   }
   .deck-backdrop .deck.deck-view-full {
-    min-width: 100%;
+    /* min-width: 100%; */
+    width: 100%;
     background-image: radial-gradient(
       circle,
       transparent 30em,
@@ -985,7 +1007,8 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 
 .media-modal-container {
   position: relative;
-  width: 100%;
+  width: 70%;
+  flex-grow: 1;
   background-color: var(--backdrop-solid-color);
   animation: appear 0.3s var(--timing-function) both;
 }
@@ -1064,6 +1087,7 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
   top: env(safe-area-inset-top, 0);
 }
 :is(.carousel-top-controls, .carousel-controls) {
+  mix-blend-mode: luminosity;
   position: absolute;
   left: 0;
   left: env(safe-area-inset-left, 0);
@@ -1087,6 +1111,21 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
 button.carousel-dot {
   pointer-events: auto;
   font-weight: bold;
+  color: var(--text-color);
+  background-color: var(--bg-faded-blur-color);
+  border: 1px solid var(--outline-color);
+  box-shadow: 0 4px 32px var(--drop-shadow-color);
+  transition: all 0.2s ease-out;
+}
+button.carousel-dot {
+  background-color: transparent;
+}
+.carousel-controls :is(.button, button).carousel-button {
+  background-color: var(--bg-blur-color);
+}
+.carousel-controls
+  :is(.button, button).carousel-button:is(:hover, :focus):not(:active) {
+  background-color: var(--bg-color);
 }
 .carousel-top-controls .szh-menu-container {
   pointer-events: auto;
@@ -1098,25 +1137,35 @@ button.carousel-dot {
 }
 .carousel-dots {
   border-radius: 999px;
-  backdrop-filter: blur(12px) invert(0.25);
+  background-color: var(--bg-faded-blur-color);
+  border: 1px solid var(--outline-color);
+  box-shadow: 0 4px 32px var(--drop-shadow-color);
+  /* backdrop-filter: blur(12px) invert(0.25); */
 }
 button.carousel-dot {
-  font-weight: bold;
   backdrop-filter: none !important;
-  transition: all 0.2s;
+  border: none;
+  box-shadow: none;
 }
 button.carousel-dot[disabled] {
   pointer-events: none;
 }
-button.carousel-dot:not(.active) {
+button.carousel-dot .icon {
+  transition: all 0.2s;
+  transform: scale(0.5);
+}
+button.carousel-dot:not(.active) .icon {
   opacity: 0.5;
 }
-button.carousel-dot:not(.active):is(:hover, :focus) {
+button.carousel-dot:not(.active):is(:hover, :focus) .icon {
   opacity: 1;
 }
 button.carousel-dot:is(.active, [disabled].active) {
   opacity: 1;
-  transform: scale(2.2) translateY(-0.5px);
+}
+button.carousel-dot:is(.active, [disabled].active) .icon {
+  opacity: 1;
+  transform: scale(1);
 }
 @media (hover: hover) {
   .carousel-top-controls {
@@ -1127,6 +1176,14 @@ button.carousel-dot:is(.active, [disabled].active) {
     transform: scale(0);
     /* transition: transform 0.2s ease-in-out; */
   }
+  .carousel-controls
+    :is(.button, button).carousel-button:is(:hover, :focus):not(:active) {
+    transform: scale(1.2);
+  }
+  .carousel-controls :is(.button, button).carousel-button:active {
+    transition-duration: 0s;
+  }
+
   :is(.carousel-top-controls, .carousel-controls)[hidden] {
     opacity: 1;
   }
@@ -1188,14 +1245,14 @@ body:has(.media-modal-container + .status-deck) .media-post-link {
     width: auto;
   }
   /* ✨ New */
-  .deck-backdrop > a {
+  /* .deck-backdrop > a {
     width: 100%;
     flex-grow: 0;
-  }
+  } */
   .deck-backdrop .media-modal-container + .status-deck:not(.deck-view-full) {
     /* display: block; */
-    /* width: 350px; */
-    min-width: 350px;
+    width: 30%;
+    /* min-width: 350px; */
     position: static;
     z-index: 1;
     pointer-events: auto;
@@ -1367,12 +1424,21 @@ body:has(.media-modal-container + .status-deck) .media-post-link {
   display: inline-block;
   margin: 4px;
   align-self: center;
+
+  &.clickable {
+    cursor: pointer;
+  }
 }
 .tag .icon {
   vertical-align: middle;
 }
 .tag.collapsed {
   margin: 0;
+}
+.tag.insignificant {
+  border: 1px solid var(--outline-color);
+  color: var(--text-insignificant-color);
+  background-color: var(--bg-faded-color);
 }
 .tag.danger {
   background-color: var(--red-color);
@@ -1530,6 +1596,9 @@ body > .szh-menu-container {
   /* two columns only */
   grid-template-columns: repeat(2, 1fr);
 }
+.szh-menu .menu-horizontal:has(> .szh-menu__item:only-child) {
+  grid-template-columns: 1fr;
+}
 .szh-menu .menu-horizontal > .szh-menu__item:not(:only-child):first-child,
 .szh-menu .menu-horizontal > *:not(:only-child):first-child .szh-menu__item {
   padding-right: 4px !important;
@@ -1623,27 +1692,35 @@ meter.donut::-moz-meter-bar {
 
 meter.donut {
   position: relative;
-  width: 24px;
-  height: 24px;
+  --dimension: 24px;
+  --border-width: 2px;
+  --middle-circle-radius: calc(var(--dimension) / 2 - var(--border-width));
+  width: var(--dimension);
+  height: var(--dimension);
   border-radius: 50%;
   --fill: calc(var(--percentage) * 1%);
   --color: var(--link-color);
   --middle-circle: radial-gradient(
     circle at 50% 50%,
-    var(--bg-faded-color) 10px,
-    transparent 10px
+    var(--bg-color) var(--middle-circle-radius),
+    transparent var(--middle-circle-radius)
   );
   background-image: var(--middle-circle),
-    conic-gradient(var(--color) var(--fill), var(--bg-faded-blur-color) 0);
+    conic-gradient(var(--color) var(--fill), var(--outline-color) 0);
+  transform: scale(0.7);
+  transition: transform 0.2s ease-in-out;
 }
 meter.donut.warning {
   --color: var(--orange-color);
+  transform: scale(1);
 }
 meter.donut.danger {
   --color: var(--red-color);
+  transform: scale(1);
 }
 meter.donut.explode {
   background-image: none;
+  transform: scale(1);
 }
 meter.donut:is(.warning, .danger, .explode):after {
   content: attr(data-left);
@@ -1666,25 +1743,22 @@ meter.donut[hidden] {
 
 :is(.shiny-pill, :root .toastify.shiny-pill) {
   pointer-events: auto;
-  color: var(--button-text-color);
-  text-shadow: 0 calc(var(--hairline-width) * -1) var(--drop-shadow-color);
-  background-color: var(--button-bg-color);
-  background-image: linear-gradient(
-    160deg,
-    rgba(255, 255, 255, 0.5),
-    rgba(0, 0, 0, 0.1)
-  );
-  box-shadow: 0 3px 8px -1px var(--drop-shadow-color),
-    0 10px 36px -4px var(--button-bg-blur-color),
-    inset var(--hairline-width) var(--hairline-width) rgba(255, 255, 255, 0.5);
-  transition: filter 0.3s;
+  color: var(--link-text-color);
+  font-weight: 500;
+  text-shadow: 0 1px var(--bg-color);
+  background-color: var(--bg-color);
+  border: 1px solid var(--outline-color);
+  box-shadow: 0 3px 16px var(--drop-shadow-color),
+    0 6px 16px -3px var(--drop-shadow-color);
 }
-:is(.shiny-pill, :root .toastify.shiny-pill):hover {
-  filter: brightness(1.2);
-}
-:is(.shiny-pill, :root .toastify.shiny-pill):active {
-  transition: none;
-  filter: brightness(0.9);
+:is(.shiny-pill, :root .toastify.shiny-pill):hover:not(:active) {
+  color: var(--text-color);
+  border-color: var(--link-color);
+  filter: none !important;
+  box-shadow: 0 0 0 1px var(--link-text-color),
+    0 3px 16px var(--drop-shadow-color),
+    0 6px 16px -3px var(--drop-shadow-color),
+    0 6px 16px var(--drop-shadow-color);
 }
 
 /* TOAST */
@@ -1696,9 +1770,10 @@ meter.donut[hidden] {
   pointer-events: none;
   color: var(--button-text-color);
   text-shadow: 0 calc(var(--hairline-width) * -1) var(--drop-shadow-color);
-  background-color: var(--button-bg-blur-color);
+  background-color: var(--button-bg-color);
   background-image: none;
-  backdrop-filter: blur(16px);
+  box-shadow: 0 3px 8px -1px var(--drop-shadow-color),
+    0 10px 36px -4px var(--button-bg-blur-color);
 }
 .toastify-bottom {
   margin-bottom: env(safe-area-inset-bottom);
@@ -1746,12 +1821,12 @@ meter.donut[hidden] {
   width: 100%;
   flex-grow: 1;
 }
-:is(#home-page, #welcome, #columns) ~ .deck-container {
+:is(#home-page, #welcome, #columns, #loader-root) ~ .deck-container {
   z-index: 10;
   position: fixed;
   inset: 0;
 }
-:is(#home-page, #welcome, #columns):has(~ .deck-container) {
+:is(#home-page, #welcome, #columns, #loader-root):has(~ .deck-container) {
   display: block;
   position: absolute;
   user-select: none;
@@ -2071,6 +2146,12 @@ ul.link-list li a .icon {
   border-radius: 999px;
 }
 
+/* NOTIFICATION PEEK */
+
+.notification-peek .notification {
+  padding-inline: 0 !important;
+}
+
 /* OTHERS */
 
 @media (min-width: 40em) {
@@ -2092,8 +2173,8 @@ ul.link-list li a .icon {
     transform: translate3d(-5vw, 0, 0);
   }
   .deck-backdrop .deck {
-    width: 50%;
-    min-width: var(--main-width);
+    /* width: 50%;
+    min-width: var(--main-width); */
     border-left: 1px solid var(--divider-color);
   }
   .timeline-deck {
@@ -2115,6 +2196,9 @@ ul.link-list li a .icon {
   }
   .timeline-deck > header[hidden] {
     transform: translate3d(0, calc((100% + var(--margin-top)) * -1), 0);
+  }
+  .deck > header {
+    text-shadow: 0 1px var(--bg-color);
   }
   .deck > header h1 {
     font-size: 1.5em;
@@ -2150,13 +2234,30 @@ ul.link-list li a .icon {
     transform: translate3d(-2.5vw, 0, 0);
   }
   .timeline:not(.flat)
+    > li.timeline-item-container:has(.status-link.is-active) {
+    border-top-left-radius: var(--item-radius);
+    border-bottom-left-radius: var(--item-radius);
+  }
+  .timeline:not(.flat)
     > li:not(:has(.status-carousel)):has(+ li .status-link.is-active),
-  .timeline:not(.flat) > li.timeline-item-container:has(.status-link.is-active),
   .timeline:not(.flat)
     > li:not(:has(.status-carousel)):has(.status-link.is-active)
     + li {
     transition: var(--back-transition);
     transform: translate3d(-1.25vw, 0, 0);
+  }
+  .timeline:not(.flat)
+    > li.timeline-item-container:not(:has(.status-carousel)):has(
+      + li .status-link.is-active
+    ) {
+    border-top-left-radius: var(--item-radius);
+  }
+  .timeline:not(.flat)
+    > li.timeline-item-container:not(:has(.status-carousel)):has(
+      .status-link.is-active
+    )
+    + li.timeline-item-container {
+    border-bottom-left-radius: var(--item-radius);
   }
   .box {
     padding: 32px;
@@ -2167,6 +2268,6 @@ ul.link-list li a .icon {
   li.timeline-item-carousel {
     width: 95vw;
     max-width: calc(320px * 3.3);
-    transform: translateX(calc(-50% + 20em));
+    transform: translateX(calc(-50% + var(--main-width) / 2));
   }
 }

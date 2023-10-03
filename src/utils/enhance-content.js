@@ -1,6 +1,7 @@
 import emojifyText from './emojify-text';
 
 const fauxDiv = document.createElement('div');
+const whitelistLinkClasses = ['u-url', 'mention', 'hashtag'];
 
 function enhanceContent(content, opts = {}) {
   const { emojis, postEnhanceDOM = () => {} } = opts;
@@ -10,28 +11,59 @@ function enhanceContent(content, opts = {}) {
   const hasLink = /<a/i.test(enhancedContent);
   const hasCodeBlock = enhancedContent.indexOf('```') !== -1;
 
-  // Add target="_blank" to all links with no target="_blank"
-  // E.g. `note` in `account`
   if (hasLink) {
+    // Add target="_blank" to all links with no target="_blank"
+    // E.g. `note` in `account`
     const noTargetBlankLinks = Array.from(
       dom.querySelectorAll('a:not([target="_blank"])'),
     );
     noTargetBlankLinks.forEach((link) => {
       link.setAttribute('target', '_blank');
     });
+
+    // Remove all classes except `u-url`, `mention`, `hashtag`
+    const links = Array.from(dom.querySelectorAll('a[class]'));
+    links.forEach((link) => {
+      Array.from(link.classList).forEach((c) => {
+        if (!whitelistLinkClasses.includes(c)) {
+          link.classList.remove(c);
+        }
+      });
+    });
+  }
+
+  // Add 'has-url-text' to all links that contains a url
+  if (hasLink) {
+    const links = Array.from(dom.querySelectorAll('a[href]'));
+    links.forEach((link) => {
+      if (/^https?:\/\//i.test(link.textContent.trim())) {
+        link.classList.add('has-url-text');
+      }
+    });
   }
 
   // Spanify un-spanned mentions
   if (hasLink) {
-    const notMentionLinks = Array.from(dom.querySelectorAll('a[href]'));
-    notMentionLinks.forEach((link) => {
+    const links = Array.from(dom.querySelectorAll('a[href]'));
+    const usernames = [];
+    links.forEach((link) => {
       const text = link.innerText.trim();
       const hasChildren = link.querySelector('*');
       // If text looks like @username@domain, then it's a mention
       if (/^@[^@]+(@[^@]+)?$/g.test(text)) {
         // Only show @username
-        const username = text.split('@')[1];
-        if (!hasChildren) link.innerHTML = `@<span>${username}</span>`;
+        const [_, username, domain] = text.split('@');
+        if (!hasChildren) {
+          if (
+            !usernames.find(([u]) => u === username) ||
+            usernames.find(([u, d]) => u === username && d === domain)
+          ) {
+            link.innerHTML = `@<span>${username}</span>`;
+            usernames.push([username, domain]);
+          } else {
+            link.innerHTML = `@<span>${username}@${domain}</span>`;
+          }
+        }
         link.classList.add('mention');
       }
       // If text looks like #hashtag, then it's a hashtag
@@ -110,7 +142,7 @@ function enhanceContent(content, opts = {}) {
           p.querySelectorAll('br').forEach((br) => br.replaceWith('\n'));
         });
         const codeText = nextParagraphs.map((p) => p.innerHTML).join('\n\n');
-        pre.innerHTML = `<code>${codeText}</code>`;
+        pre.innerHTML = `<code tabindex="0">${codeText}</code>`;
         block.replaceWith(pre);
         nextParagraphs.forEach((p) => p.remove());
       }
@@ -164,35 +196,49 @@ function enhanceContent(content, opts = {}) {
   // ================
   // Get the <p> that contains a lot of hashtags, add a class to it
   if (enhancedContent.indexOf('#') !== -1) {
-    const hashtagStuffedParagraph = Array.from(dom.querySelectorAll('p')).find(
-      (p) => {
-        let hashtagCount = 0;
-        for (let i = 0; i < p.childNodes.length; i++) {
-          const node = p.childNodes[i];
+    let prevIndex = null;
+    const hashtagStuffedParagraphs = Array.from(
+      dom.querySelectorAll('p'),
+    ).filter((p, index) => {
+      let hashtagCount = 0;
+      for (let i = 0; i < p.childNodes.length; i++) {
+        const node = p.childNodes[i];
 
-          if (node.nodeType === Node.TEXT_NODE) {
-            const text = node.textContent.trim();
-            if (text !== '') {
-              return false;
-            }
-          } else if (node.tagName === 'A') {
-            const linkText = node.textContent.trim();
-            if (!linkText || !linkText.startsWith('#')) {
-              return false;
-            } else {
-              hashtagCount++;
-            }
-          } else {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const text = node.textContent.trim();
+          if (text !== '') {
             return false;
           }
+        } else if (node.tagName === 'BR') {
+          // Ignore <br />
+        } else if (node.tagName === 'A') {
+          const linkText = node.textContent.trim();
+          if (!linkText || !linkText.startsWith('#')) {
+            return false;
+          } else {
+            hashtagCount++;
+          }
+        } else {
+          return false;
         }
-        // Only consider "stuffing" if there are more than 3 hashtags
-        return hashtagCount > 3;
-      },
-    );
-    if (hashtagStuffedParagraph) {
-      hashtagStuffedParagraph.classList.add('hashtag-stuffing');
-      hashtagStuffedParagraph.title = hashtagStuffedParagraph.innerText;
+      }
+      // Only consider "stuffing" if:
+      // - there are more than 3 hashtags
+      // - there are more than 1 hashtag in adjacent paragraphs
+      if (hashtagCount > 3) {
+        prevIndex = index;
+        return true;
+      }
+      if (hashtagCount > 1 && prevIndex && index === prevIndex + 1) {
+        prevIndex = index;
+        return true;
+      }
+    });
+    if (hashtagStuffedParagraphs?.length) {
+      hashtagStuffedParagraphs.forEach((p) => {
+        p.classList.add('hashtag-stuffing');
+        p.title = p.innerText;
+      });
     }
   }
 
