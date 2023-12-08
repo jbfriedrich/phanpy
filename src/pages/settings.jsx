@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { useSnapshot } from 'valtio';
 
 import logo from '../assets/logo.svg';
+
 import Icon from '../components/icon';
 import Link from '../components/link';
 import RelativeTime from '../components/relative-time';
@@ -17,11 +18,12 @@ import {
   removeSubscription,
   updateSubscription,
 } from '../utils/push-notifications';
+import showToast from '../utils/show-toast';
 import states from '../utils/states';
 import store from '../utils/store';
 
 const DEFAULT_TEXT_SIZE = 16;
-const TEXT_SIZES = [16, 17, 18, 19, 20];
+const TEXT_SIZES = [15, 16, 17, 18, 19, 20];
 
 function Settings({ onClose }) {
   const snapStates = useSnapshot(states);
@@ -427,6 +429,7 @@ function Settings({ onClose }) {
           <div
             style={{
               display: 'flex',
+              flexWrap: 'wrap',
               gap: 8,
               lineHeight: 1.25,
               alignItems: 'center',
@@ -482,6 +485,22 @@ function Settings({ onClose }) {
           </div>
           <p>
             <a
+              href="https://github.com/sponsors/cheeaun"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Sponsor
+            </a>{' '}
+            &middot;{' '}
+            <a
+              href="https://www.buymeacoffee.com/cheeaun"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Donate
+            </a>{' '}
+            &middot;{' '}
+            <a
               href="https://github.com/cheeaun/phanpy/blob/main/PRIVACY.MD"
               target="_blank"
               rel="noopener noreferrer"
@@ -491,21 +510,38 @@ function Settings({ onClose }) {
           </p>
           {__BUILD_TIME__ && (
             <p>
-              <span class="insignificant">Last build:</span>{' '}
-              <RelativeTime datetime={new Date(__BUILD_TIME__)} />{' '}
-              {__COMMIT_HASH__ && (
-                <>
-                  (
-                  <a
-                    href={`https://github.com/cheeaun/phanpy/commit/${__COMMIT_HASH__}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <code>{__COMMIT_HASH__}</code>
-                  </a>
-                  )
-                </>
-              )}
+              Version:{' '}
+              <input
+                type="text"
+                class="version-string"
+                readOnly
+                size="18" // Manually calculated here
+                value={`${__BUILD_TIME__.slice(0, 10).replace(/-/g, '.')}${
+                  __COMMIT_HASH__ ? `.${__COMMIT_HASH__}` : ''
+                }`}
+                onClick={(e) => {
+                  e.target.select();
+                  // Copy to clipboard
+                  try {
+                    navigator.clipboard.writeText(e.target.value);
+                    showToast('Version string copied');
+                  } catch (e) {
+                    console.warn(e);
+                    showToast('Unable to copy version string');
+                  }
+                }}
+              />{' '}
+              <span class="ib insignificant">
+                (
+                <a
+                  href={`https://github.com/cheeaun/phanpy/commit/${__COMMIT_HASH__}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <RelativeTime datetime={new Date(__BUILD_TIME__)} />
+                </a>
+                )
+              </span>
             </p>
           )}
         </section>
@@ -692,7 +728,7 @@ function PushNotificationsSection({ onClose }) {
                       },
                       {
                         value: 'favourite',
-                        label: 'Favourites',
+                        label: 'Likes',
                       },
                       {
                         value: 'reblog',

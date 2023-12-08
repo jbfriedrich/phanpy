@@ -1,17 +1,19 @@
 import './shortcuts-settings.css';
 
+import { useAutoAnimate } from '@formkit/auto-animate/preact';
 import {
   compressToEncodedURIComponent,
   decompressFromEncodedURIComponent,
 } from 'lz-string';
-import mem from 'mem';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useSnapshot } from 'valtio';
 
 import floatingButtonUrl from '../assets/floating-button.svg';
 import multiColumnUrl from '../assets/multi-column.svg';
 import tabMenuBarUrl from '../assets/tab-menu-bar.svg';
+
 import { api } from '../utils/api';
+import pmem from '../utils/pmem';
 import showToast from '../utils/show-toast';
 import states from '../utils/states';
 
@@ -20,7 +22,7 @@ import Icon from './icon';
 import MenuConfirm from './menu-confirm';
 import Modal from './modal';
 
-const SHORTCUTS_LIMIT = 9;
+export const SHORTCUTS_LIMIT = 9;
 
 const TYPES = [
   'following',
@@ -44,7 +46,7 @@ const TYPE_TEXT = {
   search: 'Search',
   'account-statuses': 'Account',
   bookmarks: 'Bookmarks',
-  favourites: 'Favourites',
+  favourites: 'Likes',
   hashtag: 'Hashtag',
   trending: 'Trending',
   mentions: 'Mentions',
@@ -103,6 +105,11 @@ const TYPE_PARAMS = {
       pattern: '[^#]+',
     },
     {
+      text: 'Media only',
+      name: 'media',
+      type: 'checkbox',
+    },
+    {
       text: 'Instance',
       name: 'instance',
       type: 'text',
@@ -111,6 +118,14 @@ const TYPE_PARAMS = {
     },
   ],
 };
+const fetchListTitle = pmem(async ({ id }) => {
+  const list = await api().masto.v1.lists.$select(id).fetch();
+  return list.title;
+});
+const fetchAccountTitle = pmem(async ({ id }) => {
+  const account = await api().masto.v1.accounts.$select(id).fetch();
+  return account.username || account.acct || account.displayName;
+});
 export const SHORTCUTS_META = {
   following: {
     id: 'home',
@@ -132,15 +147,7 @@ export const SHORTCUTS_META = {
   },
   list: {
     id: 'list',
-    title: mem(
-      async ({ id }) => {
-        const list = await api().masto.v1.lists.fetch(id);
-        return list.title;
-      },
-      {
-        cacheKey: ([{ id }]) => id,
-      },
-    ),
+    title: fetchListTitle,
     path: ({ id }) => `/l/${id}`,
     icon: 'list',
   },
@@ -166,15 +173,7 @@ export const SHORTCUTS_META = {
   },
   'account-statuses': {
     id: 'account-statuses',
-    title: mem(
-      async ({ id }) => {
-        const account = await api().masto.v1.accounts.fetch(id);
-        return account.username || account.acct || account.displayName;
-      },
-      {
-        cacheKey: ([{ id }]) => id,
-      },
-    ),
+    title: fetchAccountTitle,
     path: ({ id }) => `/a/${id}`,
     icon: 'user',
   },
@@ -186,7 +185,7 @@ export const SHORTCUTS_META = {
   },
   favourites: {
     id: 'favourites',
-    title: 'Favourites',
+    title: 'Likes',
     path: '/f',
     icon: 'heart',
   },
@@ -194,47 +193,21 @@ export const SHORTCUTS_META = {
     id: 'hashtag',
     title: ({ hashtag }) => hashtag,
     subtitle: ({ instance }) => instance || api().instance,
-    path: ({ hashtag, instance }) =>
-      `${instance ? `/${instance}` : ''}/t/${hashtag.split(/\s+/).join('+')}`,
+    path: ({ hashtag, instance, media }) =>
+      `${instance ? `/${instance}` : ''}/t/${hashtag.split(/\s+/).join('+')}${
+        media ? '?media=1' : ''
+      }`,
     icon: 'hashtag',
   },
 };
 
 function ShortcutsSettings({ onClose }) {
   const snapStates = useSnapshot(states);
-  const { masto } = api();
   const { shortcuts } = snapStates;
-
-  const [lists, setLists] = useState([]);
-  const [followedHashtags, setFollowedHashtags] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [showImportExport, setShowImportExport] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const lists = await masto.v1.lists.list();
-        setLists(lists);
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-
-    (async () => {
-      try {
-        const iterator = masto.v1.followedTags.list();
-        const tags = [];
-        do {
-          const { value, done } = await iterator.next();
-          if (done || value?.length === 0) break;
-          tags.push(...value);
-        } while (true);
-        setFollowedHashtags(tags);
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-  }, []);
+  const [shortcutsListParent] = useAutoAnimate();
 
   return (
     <div id="shortcuts-settings-container" class="sheet" tabindex="-1">
@@ -258,36 +231,36 @@ function ShortcutsSettings({ onClose }) {
         </h2>
       </header>
       <main>
-        <p>
-          Specify a list of shortcuts that'll appear&nbsp;as:
-          <div class="shortcuts-view-mode">
-            {[
-              {
-                value: 'float-button',
-                label: 'Floating button',
-                imgURL: floatingButtonUrl,
-              },
-              {
-                value: 'tab-menu-bar',
-                label: 'Tab/Menu bar',
-                imgURL: tabMenuBarUrl,
-              },
-              {
-                value: 'multi-column',
-                label: 'Multi-column',
-                imgURL: multiColumnUrl,
-              },
-            ].map(({ value, label, imgURL }) => (
-              <label>
+        <p>Specify a list of shortcuts that'll appear&nbsp;as:</p>
+        <div class="shortcuts-view-mode">
+          {[
+            {
+              value: 'float-button',
+              label: 'Floating button',
+              imgURL: floatingButtonUrl,
+            },
+            {
+              value: 'tab-menu-bar',
+              label: 'Tab/Menu bar',
+              imgURL: tabMenuBarUrl,
+            },
+            {
+              value: 'multi-column',
+              label: 'Multi-column',
+              imgURL: multiColumnUrl,
+            },
+          ].map(({ value, label, imgURL }) => {
+            const checked =
+              snapStates.settings.shortcutsViewMode === value ||
+              (value === 'float-button' &&
+                !snapStates.settings.shortcutsViewMode);
+            return (
+              <label key={value} class={checked ? 'checked' : ''}>
                 <input
                   type="radio"
                   name="shortcuts-view-mode"
                   value={value}
-                  checked={
-                    snapStates.settings.shortcutsViewMode === value ||
-                    (value === 'float-button' &&
-                      !snapStates.settings.shortcutsViewMode)
-                  }
+                  checked={checked}
                   onChange={(e) => {
                     states.settings.shortcutsViewMode = e.target.value;
                   }}
@@ -295,40 +268,14 @@ function ShortcutsSettings({ onClose }) {
                 <img src={imgURL} alt="" width="80" height="58" />{' '}
                 <span>{label}</span>
               </label>
-            ))}
-          </div>
-          {/* <select
-              value={snapStates.settings.shortcutsViewMode || 'float-button'}
-              onChange={(e) => {
-                states.settings.shortcutsViewMode = e.target.value;
-              }}
-            >
-              <option value="float-button">Floating button</option>
-              <option value="multi-column">Multi-column</option>
-              <option value="tab-menu-bar">Tab/Menu bar </option>
-            </select> */}
-        </p>
-        {/* <p>
-          <details>
-            <summary class="insignificant">
-              Experimental Multi-column mode
-            </summary>
-            <label>
-              <input
-                type="checkbox"
-                checked={snapStates.settings.shortcutsColumnsMode}
-                onChange={(e) => {
-                  states.settings.shortcutsColumnsMode = e.target.checked;
-                }}
-              />{' '}
-              Show shortcuts in multiple columns instead of the floating button.
-            </label>
-          </details>
-        </p> */}
+            );
+          })}
+        </div>
         {shortcuts.length > 0 ? (
-          <ol class="shortcuts-list">
+          <ol class="shortcuts-list" ref={shortcutsListParent}>
             {shortcuts.filter(Boolean).map((shortcut, i) => {
-              const key = i + Object.values(shortcut);
+              // const key = i + Object.values(shortcut);
+              const key = Object.values(shortcut).join('-');
               const { type } = shortcut;
               if (!SHORTCUTS_META[type]) return null;
               let { icon, title, subtitle } = SHORTCUTS_META[type];
@@ -478,8 +425,6 @@ function ShortcutsSettings({ onClose }) {
           <ShortcutForm
             shortcut={showForm.shortcut}
             shortcutIndex={showForm.shortcutIndex}
-            lists={lists}
-            followedHashtags={followedHashtags}
             onSubmit={({ result, mode }) => {
               console.log('onSubmit', result);
               if (mode === 'edit') {
@@ -511,9 +456,18 @@ function ShortcutsSettings({ onClose }) {
   );
 }
 
+const FETCH_MAX_AGE = 1000 * 60; // 1 minute
+const fetchLists = pmem(
+  () => {
+    const { masto } = api();
+    return masto.v1.lists.list();
+  },
+  {
+    maxAge: FETCH_MAX_AGE,
+  },
+);
+
 function ShortcutForm({
-  lists,
-  followedHashtags,
   onSubmit,
   disabled,
   shortcut,
@@ -523,6 +477,42 @@ function ShortcutForm({
   console.log('shortcut', shortcut);
   const editMode = !!shortcut;
   const [currentType, setCurrentType] = useState(shortcut?.type || null);
+  const { masto } = api();
+
+  const [uiState, setUIState] = useState('default');
+  const [lists, setLists] = useState([]);
+  const [followedHashtags, setFollowedHashtags] = useState([]);
+  useEffect(() => {
+    (async () => {
+      if (currentType !== 'list') return;
+      try {
+        setUIState('loading');
+        const lists = await fetchLists();
+        lists.sort((a, b) => a.title.localeCompare(b.title));
+        setLists(lists);
+        setUIState('default');
+      } catch (e) {
+        console.error(e);
+        setUIState('error');
+      }
+    })();
+
+    (async () => {
+      if (currentType !== 'hashtag') return;
+      try {
+        const iterator = masto.v1.followedTags.list();
+        const tags = [];
+        do {
+          const { value, done } = await iterator.next();
+          if (done || value?.length === 0) break;
+          tags.push(...value);
+        } while (true);
+        setFollowedHashtags(tags);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, [currentType]);
 
   const formRef = useRef();
   useEffect(() => {
@@ -612,7 +602,8 @@ function ShortcutForm({
                       <select
                         name="id"
                         required={!notRequired}
-                        disabled={disabled}
+                        disabled={disabled || uiState === 'loading'}
+                        defaultValue={editMode ? shortcut.id : undefined}
                       >
                         {lists.map((list) => (
                           <option value={list.id}>{list.title}</option>
@@ -657,7 +648,11 @@ function ShortcutForm({
             },
           )}
           <footer>
-            <button type="submit" class="block" disabled={disabled}>
+            <button
+              type="submit"
+              class="block"
+              disabled={disabled || uiState === 'loading'}
+            >
               {editMode ? 'Save' : 'Add'}
             </button>
             {editMode && (

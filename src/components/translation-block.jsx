@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import sourceLanguages from '../data/lingva-source-languages';
 import getTranslateTargetLanguage from '../utils/get-translate-target-language';
 import localeCode2Text from '../utils/localeCode2Text';
+import pmem from '../utils/pmem';
 
 import Icon from './icon';
 import Loader from './loader';
@@ -19,13 +20,14 @@ const throttle = pThrottle({
 // Using other API instances instead of lingva.ml because of this bug (slashes don't work):
 // https://github.com/thedaviddelta/lingva-translate/issues/68
 const LINGVA_INSTANCES = [
-  'lingva.garudalinux.org',
+  'lingva.phanpy.social',
   'lingva.lunar.icu',
+  'lingva.garudalinux.org',
   'translate.plausibility.cloud',
 ];
 let currentLingvaInstance = 0;
 
-function lingvaTranslate(text, source, target) {
+function _lingvaTranslate(text, source, target) {
   console.log('TRANSLATE', text, source, target);
   const fetchCall = () => {
     let instance = LINGVA_INSTANCES[currentLingvaInstance];
@@ -34,7 +36,10 @@ function lingvaTranslate(text, source, target) {
         text,
       )}`,
     )
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(res.statusText);
+        return res.json();
+      })
       .then((res) => {
         return {
           provider: 'lingva',
@@ -55,11 +60,18 @@ function lingvaTranslate(text, source, target) {
       );
     },
   });
-  // return masto.v1.statuses.translate(id, {
+  // return masto.v1.statuses.$select(id).translate({
   //   lang: DEFAULT_LANG,
   // });
 }
-const throttledLingvaTranslate = throttle(lingvaTranslate);
+const TRANSLATED_MAX_AGE = 1000 * 60 * 60; // 1 hour
+const lingvaTranslate = pmem(_lingvaTranslate, {
+  maxAge: TRANSLATED_MAX_AGE,
+});
+const throttledLingvaTranslate = pmem(throttle(lingvaTranslate), {
+  // I know, this is double-layered memoization
+  maxAge: TRANSLATED_MAX_AGE,
+});
 
 function TranslationBlock({
   forceTranslate,

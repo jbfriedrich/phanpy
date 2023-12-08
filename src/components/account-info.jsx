@@ -1,14 +1,21 @@
 import './account-info.css';
 
 import { Menu, MenuDivider, MenuItem, SubMenu } from '@szhsin/react-menu';
-import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
-import { proxy, useSnapshot } from 'valtio';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'preact/hooks';
 
 import { api } from '../utils/api';
 import enhanceContent from '../utils/enhance-content';
 import getHTMLText from '../utils/getHTMLText';
 import handleContentLinks from '../utils/handle-content-links';
 import niceDateTime from '../utils/nice-date-time';
+import pmem from '../utils/pmem';
 import shortenNumber from '../utils/shorten-number';
 import showToast from '../utils/show-toast';
 import states, { hideAllModals } from '../utils/states';
@@ -22,6 +29,7 @@ import Icon from './icon';
 import Link from './link';
 import ListAddEdit from './list-add-edit';
 import Loader from './loader';
+import Menu2 from './menu2';
 import MenuConfirm from './menu-confirm';
 import Modal from './modal';
 import TranslationBlock from './translation-block';
@@ -49,8 +57,64 @@ const MUTE_DURATIONS_LABELS = {
 
 const LIMIT = 80;
 
-const accountInfoStates = proxy({
-  familiarFollowers: [],
+const ACCOUNT_INFO_MAX_AGE = 1000 * 60 * 10; // 10 mins
+
+function fetchFamiliarFollowers(currentID, masto) {
+  return masto.v1.accounts.familiarFollowers.fetch({
+    id: [currentID],
+  });
+}
+const memFetchFamiliarFollowers = pmem(fetchFamiliarFollowers, {
+  maxAge: ACCOUNT_INFO_MAX_AGE,
+});
+
+async function fetchPostingStats(accountID, masto) {
+  const fetchStatuses = masto.v1.accounts
+    .$select(accountID)
+    .statuses.list({
+      limit: 20,
+    })
+    .next();
+
+  const { value: statuses } = await fetchStatuses;
+  console.log('fetched statuses', statuses);
+  const stats = {
+    total: statuses.length,
+    originals: 0,
+    replies: 0,
+    boosts: 0,
+  };
+  // Categories statuses by type
+  // - Original posts (not replies to others)
+  // - Threads (self-replies + 1st original post)
+  // - Boosts (reblogs)
+  // - Replies (not-self replies)
+  statuses.forEach((status) => {
+    if (status.reblog) {
+      stats.boosts++;
+    } else if (
+      !!status.inReplyToId &&
+      status.inReplyToAccountId !== status.account.id // Not self-reply
+    ) {
+      stats.replies++;
+    } else {
+      stats.originals++;
+    }
+  });
+
+  // Count days since last post
+  if (statuses.length) {
+    stats.daysSinceLastPost = Math.ceil(
+      (Date.now() - new Date(statuses[statuses.length - 1].createdAt)) /
+        86400000,
+    );
+  }
+
+  console.log('posting stats', stats);
+  return stats;
+}
+const memFetchPostingStats = pmem(fetchPostingStats, {
+  maxAge: ACCOUNT_INFO_MAX_AGE,
 });
 
 function AccountInfo({
@@ -63,19 +127,14 @@ function AccountInfo({
   const { masto } = api({
     instance,
   });
+  const { masto: currentMasto, instance: currentInstance } = api();
   const [uiState, setUIState] = useState('default');
   const isString = typeof account === 'string';
   const [info, setInfo] = useState(isString ? null : account);
-  const snapAccountInfoStates = useSnapshot(accountInfoStates);
-
-  const isSelf = useMemo(
-    () => account.id === store.session.get('currentAccount'),
-    [account?.id],
-  );
 
   const sameCurrentInstance = useMemo(
-    () => instance === api().instance,
-    [instance],
+    () => instance === currentInstance,
+    [instance, currentInstance],
   );
 
   useEffect(() => {
@@ -135,6 +194,37 @@ function AccountInfo({
     }
   }
 
+  const isSelf = useMemo(
+    () => id === store.session.get('currentAccount'),
+    [id],
+  );
+
+  useEffect(() => {
+    const infoHasEssentials = !!(
+      info?.id &&
+      info?.username &&
+      info?.acct &&
+      info?.avatar &&
+      info?.avatarStatic &&
+      info?.displayName &&
+      info?.url
+    );
+    if (isSelf && instance && infoHasEssentials) {
+      const accounts = store.local.getJSON('accounts');
+      let updated = false;
+      accounts.forEach((account) => {
+        if (account.info.id === info.id && account.instanceURL === instance) {
+          account.info = info;
+          updated = true;
+        }
+      });
+      if (updated) {
+        console.log('Updated account info', info);
+        store.local.setJSON('accounts', accounts);
+      }
+    }
+  }, [isSelf, info, instance]);
+
   const accountInstance = useMemo(() => {
     if (!url) return null;
     const domain = new URL(url).hostname;
@@ -147,7 +237,7 @@ function AccountInfo({
   const familiarFollowersCache = useRef([]);
   async function fetchFollowers(firstLoad) {
     if (firstLoad || !followersIterator.current) {
-      followersIterator.current = masto.v1.accounts.listFollowers(id, {
+      followersIterator.current = masto.v1.accounts.$select(id).followers.list({
         limit: LIMIT,
       });
     }
@@ -160,8 +250,10 @@ function AccountInfo({
     // On first load, fetch familiar followers, merge to top of results' `value`
     // Remove dups on every fetch
     if (firstLoad) {
-      const familiarFollowers = await masto.v1.accounts.fetchFamiliarFollowers(
-        id,
+      const familiarFollowers = await masto.v1.accounts.familiarFollowers.fetch(
+        {
+          id: [id],
+        },
       );
       familiarFollowersCache.current = familiarFollowers[0].accounts;
       newValue = [
@@ -191,7 +283,7 @@ function AccountInfo({
   const followingIterator = useRef();
   async function fetchFollowing(firstLoad) {
     if (firstLoad || !followingIterator.current) {
-      followingIterator.current = masto.v1.accounts.listFollowing(id, {
+      followingIterator.current = masto.v1.accounts.$select(id).following.list({
         limit: LIMIT,
       });
     }
@@ -202,8 +294,55 @@ function AccountInfo({
   const LinkOrDiv = standalone ? 'div' : Link;
   const accountLink = instance ? `/${instance}/a/${id}` : `/a/${id}`;
 
+  const [familiarFollowers, setFamiliarFollowers] = useState([]);
+  const [postingStats, setPostingStats] = useState();
+  const [postingStatsUIState, setPostingStatsUIState] = useState('default');
+  const hasPostingStats = !!postingStats?.total;
+
+  const renderFamiliarFollowers = async (currentID) => {
+    try {
+      const followers = await memFetchFamiliarFollowers(
+        currentID,
+        currentMasto,
+      );
+      console.log('fetched familiar followers', followers);
+      setFamiliarFollowers(
+        followers[0].accounts.slice(0, FAMILIAR_FOLLOWERS_LIMIT),
+      );
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const renderPostingStats = async () => {
+    if (!id) return;
+    setPostingStatsUIState('loading');
+    try {
+      const stats = await memFetchPostingStats(id, masto);
+      setPostingStats(stats);
+      setPostingStatsUIState('default');
+    } catch (e) {
+      console.error(e);
+      setPostingStatsUIState('error');
+    }
+  };
+
+  const onRelationshipChange = useCallback(
+    ({ relationship, currentID }) => {
+      if (!relationship.following) {
+        renderFamiliarFollowers(currentID);
+        if (!standalone && statusesCount > 0) {
+          // Only render posting stats if not standalone and has posts
+          renderPostingStats();
+        }
+      }
+    },
+    [standalone, id, statusesCount],
+  );
+
   return (
     <div
+      tabIndex="-1"
       class={`account-container  ${uiState === 'loading' ? 'skeleton' : ''}`}
       style={{
         '--header-color-1': headerCornerColors[0],
@@ -233,21 +372,40 @@ function AccountInfo({
           </header>
           <main>
             <div class="note">
-              <p>████████ ███████</p>
-              <p>███████████████ ███████████████</p>
+              <p>███████ ████ ████</p>
+              <p>████ ████████ ██████ █████████ ████ ██</p>
             </div>
-            <p class="stats">
-              <div>
-                <span>██</span> Followers
+            <div class="account-metadata-box">
+              <div class="profile-metadata">
+                <div class="profile-field">
+                  <b class="more-insignificant">███</b>
+                  <p>██████</p>
+                </div>
+                <div class="profile-field">
+                  <b class="more-insignificant">████</b>
+                  <p>███████████</p>
+                </div>
               </div>
-              <div>
-                <span>██</span> Following
+              <div class="stats">
+                <div>
+                  <span>██</span> Followers
+                </div>
+                <div>
+                  <span>██</span> Following
+                </div>
+                <div>
+                  <span>██</span> Posts
+                </div>
               </div>
-              <div>
-                <span>██</span> Posts
-              </div>
-              <div>Joined ██</div>
-            </p>
+            </div>
+            <div class="actions">
+              <span />
+              <span class="buttons">
+                <button type="button" title="More" class="plain" disabled>
+                  <Icon icon="more" size="l" alt="More" />
+                </button>
+              </span>
+            </div>
           </main>
         </>
       ) : (
@@ -269,7 +427,7 @@ function AccountInfo({
                 />
               </div>
             )}
-            {header && !/missing\.png$/.test(header) && (
+            {!!header && !/missing\.png$/.test(header) && (
               <img
                 src={header}
                 alt=""
@@ -376,7 +534,8 @@ function AccountInfo({
                 internal={!standalone}
               />
             </header>
-            <main tabIndex="-1">
+            <div class="faux-header-bg" aria-hidden="true" />
+            <main>
               {!!memorial && <span class="tag">In Memoriam</span>}
               {!!bot && (
                 <span class="tag">
@@ -401,8 +560,9 @@ function AccountInfo({
               ))}
               <div
                 class="note"
+                dir="auto"
                 onClick={handleContentLinks({
-                  instance,
+                  instance: currentInstance,
                 })}
                 dangerouslySetInnerHTML={{
                   __html: enhanceContent(note, { emojis }),
@@ -417,6 +577,7 @@ function AccountInfo({
                           verifiedAt ? 'profile-verified' : ''
                         }`}
                         key={name + i}
+                        dir="auto"
                       >
                         <b>
                           <EmojiText text={name} emojis={emojis} />{' '}
@@ -438,26 +599,26 @@ function AccountInfo({
                     tabIndex={0}
                     to={accountLink}
                     onClick={() => {
-                      states.showAccount = false;
-                      states.showGenericAccounts = {
-                        heading: 'Followers',
-                        fetchAccounts: fetchFollowers,
-                      };
+                      // states.showAccount = false;
+                      setTimeout(() => {
+                        states.showGenericAccounts = {
+                          heading: 'Followers',
+                          fetchAccounts: fetchFollowers,
+                        };
+                      }, 0);
                     }}
                   >
-                    {!!snapAccountInfoStates.familiarFollowers.length && (
+                    {!!familiarFollowers.length && (
                       <span class="shazam-container-horizontal">
                         <span class="shazam-container-inner stats-avatars-bunch">
-                          {(snapAccountInfoStates.familiarFollowers || []).map(
-                            (follower) => (
-                              <Avatar
-                                url={follower.avatarStatic}
-                                size="s"
-                                alt={`${follower.displayName} @${follower.acct}`}
-                                squircle={follower?.bot}
-                              />
-                            ),
-                          )}
+                          {familiarFollowers.map((follower) => (
+                            <Avatar
+                              url={follower.avatarStatic}
+                              size="s"
+                              alt={`${follower.displayName} @${follower.acct}`}
+                              squircle={follower?.bot}
+                            />
+                          ))}
                         </span>
                       </span>
                     )}
@@ -471,11 +632,13 @@ function AccountInfo({
                     tabIndex={0}
                     to={accountLink}
                     onClick={() => {
-                      states.showAccount = false;
-                      states.showGenericAccounts = {
-                        heading: 'Following',
-                        fetchAccounts: fetchFollowing,
-                      };
+                      // states.showAccount = false;
+                      setTimeout(() => {
+                        states.showGenericAccounts = {
+                          heading: 'Following',
+                          fetchAccounts: fetchFollowing,
+                        };
+                      }, 0);
                     }}
                   >
                     <span title={followingCount}>
@@ -487,13 +650,13 @@ function AccountInfo({
                   <LinkOrDiv
                     class="insignificant"
                     to={accountLink}
-                    onClick={
-                      standalone
-                        ? undefined
-                        : () => {
-                            hideAllModals();
-                          }
-                    }
+                    // onClick={
+                    //   standalone
+                    //     ? undefined
+                    //     : () => {
+                    //         hideAllModals();
+                    //       }
+                    // }
                   >
                     <span title={statusesCount}>
                       {shortenNumber(statusesCount)}
@@ -512,13 +675,118 @@ function AccountInfo({
                   )}
                 </div>
               </div>
+              {!!postingStats && (
+                <LinkOrDiv
+                  to={accountLink}
+                  class="account-metadata-box"
+                  // onClick={() => {
+                  //   states.showAccount = false;
+                  // }}
+                >
+                  <div class="shazam-container">
+                    <div class="shazam-container-inner">
+                      {hasPostingStats ? (
+                        <div
+                          class="posting-stats"
+                          title={`${Math.round(
+                            (postingStats.originals / postingStats.total) * 100,
+                          )}% original posts, ${Math.round(
+                            (postingStats.replies / postingStats.total) * 100,
+                          )}% replies, ${Math.round(
+                            (postingStats.boosts / postingStats.total) * 100,
+                          )}% boosts`}
+                        >
+                          <div>
+                            {postingStats.daysSinceLastPost < 365
+                              ? `Last ${postingStats.total} post${
+                                  postingStats.total > 1 ? 's' : ''
+                                } in the past 
+                      ${postingStats.daysSinceLastPost} day${
+                                  postingStats.daysSinceLastPost > 1 ? 's' : ''
+                                }`
+                              : `
+                      Last ${postingStats.total} posts in the past year(s)
+                      `}
+                          </div>
+                          <div
+                            class="posting-stats-bar"
+                            style={{
+                              // [originals | replies | boosts]
+                              '--originals-percentage': `${
+                                (postingStats.originals / postingStats.total) *
+                                100
+                              }%`,
+                              '--replies-percentage': `${
+                                ((postingStats.originals +
+                                  postingStats.replies) /
+                                  postingStats.total) *
+                                100
+                              }%`,
+                            }}
+                          />
+                          <div class="posting-stats-legends">
+                            <span class="ib">
+                              <span class="posting-stats-legend-item posting-stats-legend-item-originals" />{' '}
+                              Original
+                            </span>{' '}
+                            <span class="ib">
+                              <span class="posting-stats-legend-item posting-stats-legend-item-replies" />{' '}
+                              Replies
+                            </span>{' '}
+                            <span class="ib">
+                              <span class="posting-stats-legend-item posting-stats-legend-item-boosts" />{' '}
+                              Boosts
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div class="posting-stats">Post stats unavailable.</div>
+                      )}
+                    </div>
+                  </div>
+                </LinkOrDiv>
+              )}
+              <div class="account-metadata-box">
+                <div
+                  class="shazam-container no-animation"
+                  hidden={!!postingStats}
+                >
+                  <div class="shazam-container-inner">
+                    <button
+                      type="button"
+                      class="posting-stats-button"
+                      disabled={postingStatsUIState === 'loading'}
+                      onClick={() => {
+                        renderPostingStats();
+                      }}
+                    >
+                      <div
+                        class={`posting-stats-bar posting-stats-icon ${
+                          postingStatsUIState === 'loading' ? 'loading' : ''
+                        }`}
+                        style={{
+                          '--originals-percentage': '33%',
+                          '--replies-percentage': '66%',
+                        }}
+                      />
+                      View post stats{' '}
+                      {/* <Loader
+                        abrupt
+                        hidden={postingStatsUIState !== 'loading'}
+                      /> */}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </main>
+            <footer>
               <RelatedActions
                 info={info}
                 instance={instance}
                 authenticated={authenticated}
-                standalone={standalone}
+                onRelationshipChange={onRelationshipChange}
               />
-            </main>
+            </footer>
           </>
         )
       )}
@@ -528,7 +796,12 @@ function AccountInfo({
 
 const FAMILIAR_FOLLOWERS_LIMIT = 3;
 
-function RelatedActions({ info, instance, authenticated, standalone }) {
+function RelatedActions({
+  info,
+  instance,
+  authenticated,
+  onRelationshipChange = () => {},
+}) {
   if (!info) return null;
   const {
     masto: currentMasto,
@@ -539,7 +812,6 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
 
   const [relationshipUIState, setRelationshipUIState] = useState('default');
   const [relationship, setRelationship] = useState(null);
-  const [postingStats, setPostingStats] = useState();
 
   const { id, acct, url, username, locked, lastStatusAt, note, fields, moved } =
     info;
@@ -557,6 +829,7 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
     requested,
     domainBlocking,
     endorsed,
+    note: privateNote,
   } = relationship || {};
 
   const [currentInfo, setCurrentInfo] = useState(null);
@@ -573,7 +846,7 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
           // Grab this account from my logged-in instance
           const acctHasInstance = info.acct.includes('@');
           try {
-            const results = await currentMasto.v2.search({
+            const results = await currentMasto.v2.search.fetch({
               q: acctHasInstance ? info.acct : `${info.username}@${instance}`,
               type: 'accounts',
               limit: 1,
@@ -602,12 +875,12 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
         if (moved) return;
 
         setRelationshipUIState('loading');
-        accountInfoStates.familiarFollowers = [];
-        setPostingStats(null);
 
-        const fetchRelationships = currentMasto.v1.accounts.fetchRelationships([
-          currentID,
-        ]);
+        const fetchRelationships = currentMasto.v1.accounts.relationships.fetch(
+          {
+            id: [currentID],
+          },
+        );
 
         try {
           const relationships = await fetchRelationships;
@@ -617,63 +890,7 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
           if (relationships.length) {
             const relationship = relationships[0];
             setRelationship(relationship);
-
-            if (!relationship.following) {
-              try {
-                const fetchFamiliarFollowers =
-                  currentMasto.v1.accounts.fetchFamiliarFollowers(currentID);
-                const fetchStatuses = currentMasto.v1.accounts
-                  .listStatuses(currentID, {
-                    limit: 20,
-                  })
-                  .next();
-
-                const followers = await fetchFamiliarFollowers;
-                console.log('fetched familiar followers', followers);
-                accountInfoStates.familiarFollowers =
-                  followers[0].accounts.slice(0, FAMILIAR_FOLLOWERS_LIMIT);
-
-                if (!standalone) {
-                  const { value: statuses } = await fetchStatuses;
-                  console.log('fetched statuses', statuses);
-                  const stats = {
-                    total: statuses.length,
-                    originals: 0,
-                    replies: 0,
-                    boosts: 0,
-                  };
-                  // Categories statuses by type
-                  // - Original posts (not replies to others)
-                  // - Threads (self-replies + 1st original post)
-                  // - Boosts (reblogs)
-                  // - Replies (not-self replies)
-                  statuses.forEach((status) => {
-                    if (status.reblog) {
-                      stats.boosts++;
-                    } else if (
-                      status.inReplyToAccountId !== currentID &&
-                      !!status.inReplyToId
-                    ) {
-                      stats.replies++;
-                    } else {
-                      stats.originals++;
-                    }
-                  });
-
-                  // Count days since last post
-                  stats.daysSinceLastPost = Math.ceil(
-                    (Date.now() -
-                      new Date(statuses[statuses.length - 1].createdAt)) /
-                      86400000,
-                  );
-
-                  console.log('posting stats', stats);
-                  setPostingStats(stats);
-                }
-              } catch (e) {
-                console.error(e);
-              }
-            }
+            onRelationshipChange({ relationship, currentID });
           }
         } catch (e) {
           console.error(e);
@@ -690,89 +907,25 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
   }, [info, isSelf]);
 
   const loading = relationshipUIState === 'loading';
-  const menuInstanceRef = useRef(null);
 
   const [showTranslatedBio, setShowTranslatedBio] = useState(false);
   const [showAddRemoveLists, setShowAddRemoveLists] = useState(false);
-
-  const hasPostingStats = postingStats?.total >= 3;
-  const accountLink = instance ? `/${instance}/a/${id}` : `/a/${id}`;
+  const [showPrivateNoteModal, setShowPrivateNoteModal] = useState(false);
 
   return (
     <>
-      {hasPostingStats && (
-        <Link
-          to={accountLink}
-          class="account-metadata-box"
-          onClick={() => {
-            states.showAccount = false;
-          }}
-        >
-          <div class="shazam-container">
-            <div class="shazam-container-inner">
-              <div
-                class="posting-stats"
-                title={`${Math.round(
-                  (postingStats.originals / postingStats.total) * 100,
-                )}% original posts, ${Math.round(
-                  (postingStats.replies / postingStats.total) * 100,
-                )}% replies, ${Math.round(
-                  (postingStats.boosts / postingStats.total) * 100,
-                )}% boosts`}
-              >
-                <div>
-                  {postingStats.daysSinceLastPost < 365
-                    ? `Last ${postingStats.total} posts in the past 
-                    ${postingStats.daysSinceLastPost} day${
-                        postingStats.daysSinceLastPost > 1 ? 's' : ''
-                      }`
-                    : `
-                     Last ${postingStats.total} posts in the past year(s)
-                    `}
-                </div>
-                <div
-                  class="posting-stats-bar"
-                  style={{
-                    // [originals | replies | boosts]
-                    '--originals-percentage': `${
-                      (postingStats.originals / postingStats.total) * 100
-                    }%`,
-                    '--replies-percentage': `${
-                      ((postingStats.originals + postingStats.replies) /
-                        postingStats.total) *
-                      100
-                    }%`,
-                  }}
-                />
-                <div class="posting-stats-legends">
-                  <span class="ib">
-                    <span class="posting-stats-legend-item posting-stats-legend-item-originals" />{' '}
-                    Original
-                  </span>{' '}
-                  <span class="ib">
-                    <span class="posting-stats-legend-item posting-stats-legend-item-replies" />{' '}
-                    Replies
-                  </span>{' '}
-                  <span class="ib">
-                    <span class="posting-stats-legend-item posting-stats-legend-item-boosts" />{' '}
-                    Boosts
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </Link>
-      )}
-      <p class="actions">
+      <div class="actions">
         <span>
           {followedBy ? (
             <span class="tag">Following you</span>
           ) : !!lastStatusAt ? (
             <small class="insignificant">
               Last post:{' '}
-              {niceDateTime(lastStatusAt, {
-                hideTime: true,
-              })}
+              <span class="ib">
+                {niceDateTime(lastStatusAt, {
+                  hideTime: true,
+                })}
+              </span>
             </small>
           ) : (
             <span />
@@ -781,8 +934,20 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
           {blocking && <span class="tag danger">Blocked</span>}
         </span>{' '}
         <span class="buttons">
-          <Menu
-            instanceRef={menuInstanceRef}
+          {!!privateNote && (
+            <button
+              type="button"
+              class="private-note-tag"
+              title="Private note"
+              onClick={() => {
+                setShowPrivateNoteModal(true);
+              }}
+              dir="auto"
+            >
+              <span>{privateNote}</span>
+            </button>
+          )}
+          <Menu2
             portal={{
               target: document.body,
             }}
@@ -791,16 +956,10 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
                 // Higher than the backdrop
                 zIndex: 1001,
               },
-              onClick: (e) => {
-                if (e.target === e.currentTarget) {
-                  menuInstanceRef.current?.closeMenu?.();
-                }
-              },
             }}
             align="center"
             position="anchor"
             overflow="auto"
-            boundingBoxPadding="8 8 8 8"
             menuButton={
               <button
                 type="button"
@@ -833,6 +992,16 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
                 >
                   <Icon icon="translate" />
                   <span>Translate bio</span>
+                </MenuItem>
+                <MenuItem
+                  onClick={() => {
+                    setShowPrivateNoteModal(true);
+                  }}
+                >
+                  <Icon icon="pencil" />
+                  <span>
+                    {privateNote ? 'Edit private note' : 'Add private note'}
+                  </span>
                 </MenuItem>
                 {/* Add/remove from lists is only possible if following the account */}
                 {following && (
@@ -898,10 +1067,9 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
                       setRelationshipUIState('loading');
                       (async () => {
                         try {
-                          const newRelationship =
-                            await currentMasto.v1.accounts.unmute(
-                              currentInfo?.id || id,
-                            );
+                          const newRelationship = await currentMasto.v1.accounts
+                            .$select(currentInfo?.id || id)
+                            .unmute();
                           console.log('unmuting', newRelationship);
                           setRelationship(newRelationship);
                           setRelationshipUIState('default');
@@ -947,12 +1115,11 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
                             (async () => {
                               try {
                                 const newRelationship =
-                                  await currentMasto.v1.accounts.mute(
-                                    currentInfo?.id || id,
-                                    {
+                                  await currentMasto.v1.accounts
+                                    .$select(currentInfo?.id || id)
+                                    .mute({
                                       duration,
-                                    },
-                                  );
+                                    });
                                 console.log('muting', newRelationship);
                                 setRelationship(newRelationship);
                                 setRelationshipUIState('default');
@@ -993,19 +1160,17 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
                     (async () => {
                       try {
                         if (blocking) {
-                          const newRelationship =
-                            await currentMasto.v1.accounts.unblock(
-                              currentInfo?.id || id,
-                            );
+                          const newRelationship = await currentMasto.v1.accounts
+                            .$select(currentInfo?.id || id)
+                            .unblock();
                           console.log('unblocking', newRelationship);
                           setRelationship(newRelationship);
                           setRelationshipUIState('default');
                           showToast(`Unblocked @${username}`);
                         } else {
-                          const newRelationship =
-                            await currentMasto.v1.accounts.block(
-                              currentInfo?.id || id,
-                            );
+                          const newRelationship = await currentMasto.v1.accounts
+                            .$select(currentInfo?.id || id)
+                            .block();
                           console.log('blocking', newRelationship);
                           setRelationship(newRelationship);
                           setRelationshipUIState('default');
@@ -1043,7 +1208,7 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
               </MenuItem> */}
               </>
             )}
-          </Menu>
+          </Menu2>
           {!relationship && relationshipUIState === 'loading' && (
             <Loader abrupt />
           )}
@@ -1074,14 +1239,14 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
                       // );
 
                       // if (yes) {
-                      newRelationship = await currentMasto.v1.accounts.unfollow(
-                        accountID.current,
-                      );
+                      newRelationship = await currentMasto.v1.accounts
+                        .$select(accountID.current)
+                        .unfollow();
                       // }
                     } else {
-                      newRelationship = await currentMasto.v1.accounts.follow(
-                        accountID.current,
-                      );
+                      newRelationship = await currentMasto.v1.accounts
+                        .$select(accountID.current)
+                        .follow();
                     }
 
                     if (newRelationship) setRelationship(newRelationship);
@@ -1120,7 +1285,7 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
             </MenuConfirm>
           )}
         </span>
-      </p>
+      </div>
       {!!showTranslatedBio && (
         <Modal
           class="light"
@@ -1145,6 +1310,24 @@ function RelatedActions({ info, instance, authenticated, standalone }) {
           <AddRemoveListsSheet
             accountID={accountID.current}
             onClose={() => setShowAddRemoveLists(false)}
+          />
+        </Modal>
+      )}
+      {!!showPrivateNoteModal && (
+        <Modal
+          class="light"
+          onClose={() => {
+            setShowPrivateNoteModal(false);
+          }}
+        >
+          <PrivateNoteSheet
+            account={info}
+            note={privateNote}
+            onRelationshipChange={(relationship) => {
+              setRelationship(relationship);
+              // onRelationshipChange({ relationship, currentID: accountID.current });
+            }}
+            onClose={() => setShowPrivateNoteModal(false)}
           />
         </Modal>
       )}
@@ -1226,9 +1409,10 @@ function AddRemoveListsSheet({ accountID, onClose }) {
     (async () => {
       try {
         const lists = await masto.v1.lists.list();
-        const listsContainingAccount = await masto.v1.accounts.listLists(
-          accountID,
-        );
+        lists.sort((a, b) => a.title.localeCompare(b.title));
+        const listsContainingAccount = await masto.v1.accounts
+          .$select(accountID)
+          .lists.list();
         console.log({ lists, listsContainingAccount });
         setLists(lists);
         setListsContainingAccount(listsContainingAccount);
@@ -1270,13 +1454,17 @@ function AddRemoveListsSheet({ accountID, onClose }) {
                       (async () => {
                         try {
                           if (inList) {
-                            await masto.v1.lists.removeAccount(list.id, {
-                              accountIds: [accountID],
-                            });
+                            await masto.v1.lists
+                              .$select(list.id)
+                              .accounts.remove({
+                                accountIds: [accountID],
+                              });
                           } else {
-                            await masto.v1.lists.addAccount(list.id, {
-                              accountIds: [accountID],
-                            });
+                            await masto.v1.lists
+                              .$select(list.id)
+                              .accounts.create({
+                                accountIds: [accountID],
+                              });
                           }
                           // setUIState('default');
                           reload();
@@ -1337,6 +1525,97 @@ function AddRemoveListsSheet({ accountID, onClose }) {
           />
         </Modal>
       )}
+    </div>
+  );
+}
+
+function PrivateNoteSheet({
+  account,
+  note: initialNote,
+  onRelationshipChange = () => {},
+  onClose = () => {},
+}) {
+  const { masto } = api();
+  const [uiState, setUIState] = useState('default');
+  const textareaRef = useRef(null);
+
+  useEffect(() => {
+    let timer;
+    if (textareaRef.current && !initialNote) {
+      timer = setTimeout(() => {
+        textareaRef.current.focus?.();
+      }, 100);
+    }
+    return () => {
+      clearTimeout(timer);
+    };
+  }, []);
+
+  return (
+    <div class="sheet" id="private-note-container">
+      {!!onClose && (
+        <button type="button" class="sheet-close" onClick={onClose}>
+          <Icon icon="x" />
+        </button>
+      )}
+      <header>
+        <b>Private note about @{account?.username || account?.acct}</b>
+      </header>
+      <main>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const note = formData.get('note');
+            if (note?.trim() !== initialNote?.trim()) {
+              setUIState('loading');
+              (async () => {
+                try {
+                  const newRelationship = await masto.v1.accounts
+                    .$select(account?.id)
+                    .note.create({
+                      comment: note,
+                    });
+                  console.log('updated relationship', newRelationship);
+                  setUIState('default');
+                  onRelationshipChange(newRelationship);
+                  onClose();
+                } catch (e) {
+                  console.error(e);
+                  setUIState('error');
+                  alert(e?.message || 'Unable to update private note.');
+                }
+              })();
+            }
+          }}
+        >
+          <textarea
+            ref={textareaRef}
+            name="note"
+            disabled={uiState === 'loading'}
+          >
+            {initialNote}
+          </textarea>
+          <footer>
+            <button
+              type="button"
+              class="light"
+              disabled={uiState === 'loading'}
+              onClick={() => {
+                onClose?.();
+              }}
+            >
+              Cancel
+            </button>
+            <span>
+              <Loader abrupt hidden={uiState !== 'loading'} />
+              <button disabled={uiState === 'loading'} type="submit">
+                Save &amp; close
+              </button>
+            </span>
+          </footer>
+        </form>
+      </main>
     </div>
   );
 }

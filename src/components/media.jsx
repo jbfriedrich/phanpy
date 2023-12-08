@@ -1,5 +1,4 @@
 import { getBlurHashAverageColor } from 'fast-blurhash';
-import mem from 'mem';
 import { Fragment } from 'preact';
 import {
   useCallback,
@@ -10,6 +9,7 @@ import {
 } from 'preact/hooks';
 import QuickPinchZoom, { make3dTransformValue } from 'react-quick-pinch-zoom';
 
+import mem from '../utils/mem';
 import states from '../utils/states';
 
 import Icon from './icon';
@@ -62,6 +62,7 @@ export const isMediaCaptionLong = mem((caption) =>
 );
 
 function Media({
+  class: className = '',
   media,
   to,
   lang,
@@ -130,6 +131,7 @@ function Media({
     enabled: pinchZoomEnabled,
     draggableUnZoomed: false,
     inertiaFriction: 0.9,
+    doubleTapZoomOutOnMaxScale: true,
     containerProps: {
       className: 'media-zoom',
       style: {
@@ -169,15 +171,24 @@ function Media({
   const maxAspectHeight =
     window.innerHeight * (orientation === 'portrait' ? 0.45 : 0.33);
   const maxHeight = orientation === 'portrait' ? 0 : 160;
-  const mediaStyles = {
-    '--width': `${width}px`,
-    '--height': `${height}px`,
-    // Calculate '--aspectWidth' based on aspect ratio calculated from '--width' and '--height', max height has to be 160px
-    '--aspectWidth': `${
-      (width / height) * Math.max(maxHeight, maxAspectHeight)
-    }px`,
-    aspectRatio: `${width} / ${height}`,
+  const averageColorStyle = {
+    '--average-color': rgbAverageColor && `rgb(${rgbAverageColor.join(',')})`,
   };
+  const mediaStyles =
+    width && height
+      ? {
+          '--width': `${width}px`,
+          '--height': `${height}px`,
+          // Calculate '--aspectWidth' based on aspect ratio calculated from '--width' and '--height', max height has to be 160px
+          '--aspectWidth': `${
+            (width / height) * Math.max(maxHeight, maxAspectHeight)
+          }px`,
+          aspectRatio: `${width} / ${height}`,
+          ...averageColorStyle,
+        }
+      : {
+          ...averageColorStyle,
+        };
 
   const longDesc = isMediaCaptionLong(description);
   const showInlineDesc =
@@ -229,7 +240,7 @@ function Media({
       <Figure>
         <Parent
           ref={parentRef}
-          class={`media media-image`}
+          class={`media media-image ${className}`}
           onClick={onClick}
           data-orientation={orientation}
           data-has-alt={!showInlineDesc}
@@ -240,6 +251,7 @@ function Media({
                   backgroundSize: imageSmallerThanParent
                     ? `${width}px ${height}px`
                     : undefined,
+                  ...averageColorStyle,
                 }
               : mediaStyles
           }
@@ -316,6 +328,7 @@ function Media({
     const formattedDuration = formatDuration(original.duration);
     const hoverAnimate = !showOriginal && !autoAnimate && isGIF;
     const autoGIFAnimate = !showOriginal && autoAnimate && isGIF;
+    const showProgress = original.duration > 5;
 
     const videoHTML = `
     <video
@@ -331,17 +344,24 @@ function Media({
       playsinline
       loop="${loopable}"
       ${isGIF ? 'ondblclick="this.paused ? this.play() : this.pause()"' : ''}
+      ${
+        isGIF && showProgress
+          ? "ontimeupdate=\"this.closest('.media-gif') && this.closest('.media-gif').style.setProperty('--progress', `${~~((this.currentTime / this.duration) * 100)}%`)\""
+          : ''
+      }
     ></video>
   `;
 
     return (
       <Figure>
         <Parent
-          class={`media media-${isGIF ? 'gif' : 'video'} ${
+          class={`media ${className} media-${isGIF ? 'gif' : 'video'} ${
             autoGIFAnimate ? 'media-contain' : ''
           }`}
           data-orientation={orientation}
-          data-formatted-duration={formattedDuration}
+          data-formatted-duration={
+            !showOriginal ? formattedDuration : undefined
+          }
           data-label={isGIF && !showOriginal && !autoGIFAnimate ? 'GIF' : ''}
           data-has-alt={!showInlineDesc}
           // style={{
@@ -417,6 +437,22 @@ function Media({
               playsinline
               loop
               muted
+              onTimeUpdate={
+                showProgress
+                  ? (e) => {
+                      const { target } = e;
+                      const container = target?.closest('.media-gif');
+                      if (container) {
+                        const percentage =
+                          (target.currentTime / target.duration) * 100;
+                        container.style.setProperty(
+                          '--progress',
+                          `${percentage}%`,
+                        );
+                      }
+                    }
+                  : undefined
+              }
             />
           ) : (
             <>
@@ -444,8 +480,10 @@ function Media({
     return (
       <Figure>
         <Parent
-          class="media media-audio"
-          data-formatted-duration={formattedDuration}
+          class={`media media-audio ${className}`}
+          data-formatted-duration={
+            !showOriginal ? formattedDuration : undefined
+          }
           data-has-alt={!showInlineDesc}
           onClick={onClick}
           style={!showOriginal && mediaStyles}

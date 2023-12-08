@@ -32,7 +32,7 @@ function List(props) {
   const listIterator = useRef();
   async function fetchList(firstLoad) {
     if (firstLoad || !listIterator.current) {
-      listIterator.current = masto.v1.timelines.listList(id, {
+      listIterator.current = masto.v1.timelines.list.$select(id).list({
         limit: LIMIT,
       });
     }
@@ -43,7 +43,7 @@ function List(props) {
         latestItem.current = value[0].id;
       }
 
-      value = filteredItems(value, 'home');
+      // value = filteredItems(value, 'home');
       value.forEach((item) => {
         saveStatus(item, instance);
       });
@@ -56,7 +56,7 @@ function List(props) {
 
   async function checkForUpdates() {
     try {
-      const results = await masto.v1.timelines.listList(id, {
+      const results = await masto.v1.timelines.list.$select(id).list({
         limit: 1,
         since_id: latestItem.current,
       });
@@ -77,7 +77,7 @@ function List(props) {
   useEffect(() => {
     (async () => {
       try {
-        const list = await masto.v1.lists.fetch(id);
+        const list = await masto.v1.lists.$select(id).fetch();
         setList(list);
         // setTitle(list.title);
       } catch (e) {
@@ -102,7 +102,8 @@ function List(props) {
         checkForUpdates={checkForUpdates}
         useItemID
         boostsCarousel={snapStates.settings.boostsCarousel}
-        allowFilters
+        // allowFilters
+        filterContext="home"
         // refresh={reloadCount}
         headerStart={
           <Link to="/l" class="button plain">
@@ -200,9 +201,11 @@ function ListManageMembers({ listID, onClose }) {
     (async () => {
       try {
         if (firstLoad || !membersIterator.current) {
-          membersIterator.current = masto.v1.lists.listAccounts(listID, {
-            limit: MEMBERS_LIMIT,
-          });
+          membersIterator.current = masto.v1.lists
+            .$select(listID)
+            .accounts.list({
+              limit: MEMBERS_LIMIT,
+            });
         }
         const results = await membersIterator.current.next();
         let { done, value } = results;
@@ -274,7 +277,7 @@ function RemoveAddButton({ account, listID }) {
           setUIState('loading');
           (async () => {
             try {
-              await masto.v1.lists.addAccount(listID, {
+              await masto.v1.lists.$select(listID).accounts.create({
                 accountIds: [account.id],
               });
               setUIState('default');
@@ -290,7 +293,7 @@ function RemoveAddButton({ account, listID }) {
 
           (async () => {
             try {
-              await masto.v1.lists.removeAccount(listID, {
+              await masto.v1.lists.$select(listID).accounts.remove({
                 accountIds: [account.id],
               });
               setUIState('default');

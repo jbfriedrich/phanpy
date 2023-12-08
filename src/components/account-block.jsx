@@ -3,7 +3,6 @@ import './account-block.css';
 // import { useNavigate } from 'react-router-dom';
 import enhanceContent from '../utils/enhance-content';
 import niceDateTime from '../utils/nice-date-time';
-import shortenNumber from '../utils/shorten-number';
 import states from '../utils/states';
 
 import Avatar from './avatar';
@@ -14,6 +13,7 @@ function AccountBlock({
   skeleton,
   account,
   avatarSize = 'xl',
+  useAvatarStatic = false,
   instance,
   external,
   internal,
@@ -82,8 +82,12 @@ function AccountBlock({
         }
       }}
     >
-      <Avatar url={avatar} size={avatarSize} squircle={bot} />
-      <span>
+      <Avatar
+        url={useAvatarStatic ? avatarStatic : avatar || avatarStatic}
+        size={avatarSize}
+        squircle={bot}
+      />
+      <span class="account-block-content">
         {!hideDisplayName && (
           <>
             {displayName ? (

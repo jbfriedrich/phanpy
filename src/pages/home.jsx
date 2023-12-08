@@ -13,7 +13,6 @@ import Notification from '../components/notification';
 import { api } from '../utils/api';
 import db from '../utils/db';
 import groupNotifications from '../utils/group-notifications';
-import openCompose from '../utils/open-compose';
 import states, { saveStatus } from '../utils/states';
 import { getCurrentAccountNS } from '../utils/store-utils';
 
@@ -36,8 +35,9 @@ function Home() {
 
   return (
     <>
-      {(snapStates.settings.shortcutsColumnsMode ||
-        snapStates.settings.shortcutsViewMode === 'multi-column') &&
+      {(snapStates.settings.shortcutsViewMode === 'multi-column' ||
+        (!snapStates.settings.shortcutsViewMode &&
+          snapStates.settings.shortcutsColumnsMode)) &&
       !!snapStates.shortcuts?.length ? (
         <Columns />
       ) : (
@@ -49,24 +49,6 @@ function Home() {
           headerEnd={<NotificationsLink />}
         />
       )}
-      {/* <button
-        // hidden={scrollDirection === 'end' && !nearReachStart}
-        type="button"
-        id="compose-button"
-        onClick={(e) => {
-          if (e.shiftKey) {
-            const newWin = openCompose();
-            if (!newWin) {
-              alert('Looks like your browser is blocking popups.');
-              states.showCompose = true;
-            }
-          } else {
-            states.showCompose = true;
-          }
-        }}
-      >
-        <Icon icon="quill" size="xl" alt="Compose" />
-      </button> */}
     </>
   );
 }
@@ -82,7 +64,7 @@ function NotificationsLink() {
         to="/notifications"
         class={`button plain notifications-button ${
           snapStates.notificationsShowNew ? 'has-badge' : ''
-        } ${menuState}`}
+        } ${menuState || ''}`}
         onClick={(e) => {
           e.stopPropagation();
           if (window.matchMedia('(min-width: calc(40em))').matches) {

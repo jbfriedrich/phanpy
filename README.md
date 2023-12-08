@@ -121,6 +121,7 @@ Try search for "how to self-host static sites" as there are many ways to do it.
 - [React Router](https://reactrouter.com/) - Routing
 - [masto.js](https://github.com/neet/masto.js/) - Mastodon API client
 - [Iconify](https://iconify.design/) - Icon library
+  - [MingCute icons](https://www.mingcute.com/)
 - Vanilla CSS - *Yes, I'm old school.*
 
 Some of these may change in the future. The front-end world is ever-changing.
@@ -137,9 +138,11 @@ Costs involved in running and developing this web app:
 
 [Phanpy](https://bulbapedia.bulbagarden.net/wiki/Phanpy_(Pok%C3%A9mon)) is a Ground-type Pokémon.
 
-## Maintainers
+## Maintainers + contributors
 
 - [Chee Aun](https://github.com/cheeaun) ([Mastodon](https://mastodon.social/@cheeaun)) ([Twitter](https://twitter.com/cheeaun))
+
+[![Contributors](https://contrib.rocks/image?repo=cheeaun/phanpy)](https://github.com/cheeaun/phanpy/graphs/contributors)
 
 ## Backstory
 
@@ -169,6 +172,7 @@ And here I am. Building a Mastodon web client.
 - [Litterbox](https://litterbox.koyu.space/)
 - [Statuzer](https://statuzer.com/)
 - [Tusked](https://tusked.app/)
+- [Mastodon Glitch Edition (standalone frontend)](https://iceshrimp.dev/iceshrimp/masto-fe-standalone)
 - [More...](https://github.com/hueyy/awesome-mastodon/#clients)
 
 ## 💁‍♂️ Notice to all other social media client developers

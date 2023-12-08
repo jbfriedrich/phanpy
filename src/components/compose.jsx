@@ -5,9 +5,10 @@ import equal from 'fast-deep-equal';
 import { forwardRef } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { substring } from 'runes2';
 import stringLength from 'string-length';
 import { uid } from 'uid/single';
-import { useDebouncedCallback } from 'use-debounce';
+import { useDebouncedCallback, useThrottledCallback } from 'use-debounce';
 import { useSnapshot } from 'valtio';
 
 import supportedLanguages from '../data/status-supported-languages';
@@ -17,12 +18,14 @@ import db from '../utils/db';
 import emojifyText from '../utils/emojify-text';
 import localeMatch from '../utils/locale-match';
 import openCompose from '../utils/open-compose';
+import shortenNumber from '../utils/shorten-number';
 import states, { saveStatus } from '../utils/states';
 import store from '../utils/store';
 import {
   getCurrentAccount,
   getCurrentAccountNS,
   getCurrentInstance,
+  getCurrentInstanceConfiguration,
 } from '../utils/store-utils';
 import supports from '../utils/supports';
 import useInterval from '../utils/useInterval';
@@ -102,6 +105,56 @@ function countableText(inputText) {
     .replace(usernameRegex, '$1@$3');
 }
 
+// https://github.com/mastodon/mastodon/blob/c03bd2a238741a012aa4b98dc4902d6cf948ab63/app/models/account.rb#L69
+const USERNAME_RE = /[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?/i;
+const MENTION_RE = new RegExp(
+  `(^|[^=\\/\\w])(@${USERNAME_RE.source}(?:@[\\p{L}\\w.-]+[\\w]+)?)`,
+  'uig',
+);
+
+// AI-generated, all other regexes are too complicated
+const HASHTAG_RE = new RegExp(
+  `(^|[^=\\/\\w])(#[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?)(?![\\/\\w])`,
+  'ig',
+);
+
+// https://github.com/mastodon/mastodon/blob/23e32a4b3031d1da8b911e0145d61b4dd47c4f96/app/models/custom_emoji.rb#L31
+const SHORTCODE_RE_FRAGMENT = '[a-zA-Z0-9_]{2,}';
+const SCAN_RE = new RegExp(
+  `([^A-Za-z0-9_:\\n]|^)(:${SHORTCODE_RE_FRAGMENT}:)(?=[^A-Za-z0-9_:]|$)`,
+  'g',
+);
+
+function highlightText(text, { maxCharacters = Infinity }) {
+  // Accept text string, return formatted HTML string
+  let html = text;
+  // Exceeded characters limit
+  const { composerCharacterCount } = states;
+  let leftoverHTML = '';
+  if (composerCharacterCount > maxCharacters) {
+    // NOTE: runes2 substring considers surrogate pairs
+    // const leftoverCount = composerCharacterCount - maxCharacters;
+    // Highlight exceeded characters
+    leftoverHTML =
+      '<mark class="compose-highlight-exceeded">' +
+      // html.slice(-leftoverCount) +
+      substring(html, maxCharacters) +
+      '</mark>';
+    // html = html.slice(0, -leftoverCount);
+    html = substring(html, 0, maxCharacters);
+    return html + leftoverHTML;
+  }
+
+  return html
+    .replace(urlRegexObj, '$2<mark class="compose-highlight-url">$3</mark>') // URLs
+    .replace(MENTION_RE, '$1<mark class="compose-highlight-mention">$2</mark>') // Mentions
+    .replace(HASHTAG_RE, '$1<mark class="compose-highlight-hashtag">$2</mark>') // Hashtags
+    .replace(
+      SCAN_RE,
+      '$1<mark class="compose-highlight-emoji-shortcode">$2</mark>',
+    ); // Emoji shortcodes
+}
+
 function Compose({
   onClose,
   replyToStatus,
@@ -119,21 +172,30 @@ function Compose({
   const currentAccount = getCurrentAccount();
   const currentAccountInfo = currentAccount.info;
 
-  const { configuration } = getCurrentInstance();
+  const configuration = getCurrentInstanceConfiguration();
   console.log('⚙️ Configuration', configuration);
 
   const {
-    statuses: { maxCharacters, maxMediaAttachments, charactersReservedPerUrl },
+    statuses: {
+      maxCharacters,
+      maxMediaAttachments,
+      charactersReservedPerUrl,
+    } = {},
     mediaAttachments: {
-      supportedMimeTypes,
+      supportedMimeTypes = [],
       imageSizeLimit,
       imageMatrixLimit,
       videoSizeLimit,
       videoMatrixLimit,
       videoFrameRateLimit,
-    },
-    polls: { maxOptions, maxCharactersPerOption, maxExpiration, minExpiration },
-  } = configuration;
+    } = {},
+    polls: {
+      maxOptions,
+      maxCharactersPerOption,
+      maxExpiration,
+      minExpiration,
+    } = {},
+  } = configuration || {};
 
   const textareaRef = useRef();
   const spoilerTextRef = useRef();
@@ -185,7 +247,7 @@ function Compose({
           : visibility,
       );
       setLanguage(language || prefs.postingDefaultLanguage || DEFAULT_LANG);
-      setSensitive(sensitive);
+      setSensitive(sensitive && !!spoilerText);
     } else if (editStatus) {
       const { visibility, language, sensitive, poll, mediaAttachments } =
         editStatus;
@@ -197,9 +259,9 @@ function Compose({
       setUIState('loading');
       (async () => {
         try {
-          const statusSource = await masto.v1.statuses.fetchSource(
-            editStatus.id,
-          );
+          const statusSource = await masto.v1.statuses
+            .$select(editStatus.id)
+            .source.fetch();
           console.log({ statusSource });
           const { text, spoilerText } = statusSource;
           textareaRef.current.value = text;
@@ -377,6 +439,13 @@ function Compose({
       enableOnFormTags: true,
       // Use keyup because Esc keydown will close the confirm dialog on Safari
       keyup: true,
+      ignoreEventWhen: (e) => {
+        const modals = document.querySelectorAll('#modal-container > *');
+        const hasModal = !!modals;
+        const hasOnlyComposer =
+          modals.length === 1 && modals[0].querySelector('#compose-container');
+        return hasModal && !hasOnlyComposer;
+      },
     },
   );
 
@@ -504,6 +573,34 @@ function Compose({
 
   const [showEmoji2Picker, setShowEmoji2Picker] = useState(false);
 
+  const [topSupportedLanguages, restSupportedLanguages] = useMemo(() => {
+    const topLanguages = [];
+    const restLanguages = [];
+    const { contentTranslationHideLanguages = [] } = states.settings;
+    supportedLanguages.forEach((l) => {
+      const [code] = l;
+      if (
+        code === language ||
+        code === prevLanguage.current ||
+        code === DEFAULT_LANG ||
+        contentTranslationHideLanguages.includes(code)
+      ) {
+        topLanguages.push(l);
+      } else {
+        restLanguages.push(l);
+      }
+    });
+    topLanguages.sort(([codeA, commonA], [codeB, commonB]) => {
+      if (codeA === language) return -1;
+      if (codeB === language) return 1;
+      return commonA.localeCompare(commonB);
+    });
+    restLanguages.sort(([codeA, commonA], [codeB, commonB]) =>
+      commonA.localeCompare(commonB),
+    );
+    return [topLanguages, restLanguages];
+  }, [language]);
+
   return (
     <div id="compose-container-outer">
       <div id="compose-container" class={standalone ? 'standalone' : ''}>
@@ -519,6 +616,7 @@ function Compose({
               account={currentAccountInfo}
               accountInstance={currentAccount.instanceURL}
               hideDisplayName
+              useAvatarStatic
             />
           )}
           {!standalone ? (
@@ -561,7 +659,6 @@ function Compose({
                   });
 
                   if (!newWin) {
-                    alert('Looks like your browser is blocking popups.');
                     return;
                   }
 
@@ -749,14 +846,12 @@ function Compose({
                         file,
                         description,
                       });
-                      return masto.v2.mediaAttachments
-                        .create(params)
-                        .then((res) => {
-                          if (res.id) {
-                            attachment.id = res.id;
-                          }
-                          return res;
-                        });
+                      return masto.v2.media.create(params).then((res) => {
+                        if (res.id) {
+                          attachment.id = res.id;
+                        }
+                        return res;
+                      });
                     }
                   });
                   const results = await Promise.allSettled(mediaPromises);
@@ -784,6 +879,8 @@ function Compose({
                 /* NOTE:
                 Using snakecase here because masto.js's `isObject` returns false for `params`, ONLY happens when opening in pop-out window. This is maybe due to `window.masto` variable being passed from the parent window. The check that failed is `x.constructor === Object`, so maybe the `Object` in new window is different than parent window's?
                 Code: https://github.com/neet/masto.js/blob/dd0d649067b6a2b6e60fbb0a96597c373a255b00/src/serializers/is-object.ts#L2
+
+                // TODO: Note above is no longer true in Masto.js v6. Revisit this.
               */
                 let params = {
                   status,
@@ -818,10 +915,9 @@ function Compose({
 
                 let newStatus;
                 if (editStatus) {
-                  newStatus = await masto.v1.statuses.update(
-                    editStatus.id,
-                    params,
-                  );
+                  newStatus = await masto.v1.statuses
+                    .$select(editStatus.id)
+                    .update(params);
                   saveStatus(newStatus, instance, {
                     skipThreading: true,
                   });
@@ -935,13 +1031,13 @@ function Compose({
             performSearch={(params) => {
               const { type, q, limit } = params;
               if (type === 'accounts') {
-                return masto.v1.accounts.search({
+                return masto.v1.accounts.search.list({
                   q,
                   limit,
                   resolve: false,
                 });
               }
-              return masto.v2.search(params);
+              return masto.v2.search.fetch(params);
             }}
           />
           {mediaAttachments?.length > 0 && (
@@ -1109,32 +1205,17 @@ function Compose({
                 }}
                 disabled={uiState === 'loading'}
               >
-                {supportedLanguages
-                  .sort(([codeA, commonA], [codeB, commonB]) => {
-                    const { contentTranslationHideLanguages = [] } =
-                      states.settings;
-                    // Sort codes that same as language, prevLanguage, DEFAULT_LANGUAGE and all the ones in states.settings.contentTranslationHideLanguages, to the top
-                    if (
-                      codeA === language ||
-                      codeA === prevLanguage ||
-                      codeA === DEFAULT_LANG ||
-                      contentTranslationHideLanguages?.includes(codeA)
-                    )
-                      return -1;
-                    if (
-                      codeB === language ||
-                      codeB === prevLanguage ||
-                      codeB === DEFAULT_LANG ||
-                      contentTranslationHideLanguages?.includes(codeB)
-                    )
-                      return 1;
-                    return commonA.localeCompare(commonB);
-                  })
-                  .map(([code, common, native]) => (
-                    <option value={code}>
-                      {common} ({native})
-                    </option>
-                  ))}
+                {topSupportedLanguages.map(([code, common, native]) => (
+                  <option value={code} key={code}>
+                    {common} ({native})
+                  </option>
+                ))}
+                <hr />
+                {restSupportedLanguages.map(([code, common, native]) => (
+                  <option value={code} key={code}>
+                    {common} ({native})
+                  </option>
+                ))}
               </select>
             </label>{' '}
             <button
@@ -1192,7 +1273,8 @@ function autoResizeTextarea(textarea) {
     // NOTE: This check is needed because the offsetHeight return 50000 (really large number) on first render
     // No idea why it does that, will re-investigate in far future
     const offset = offsetHeight - clientHeight;
-    textarea.style.height = value ? scrollHeight + offset + 'px' : null;
+    const height = value ? scrollHeight + offset + 'px' : null;
+    textarea.style.height = height;
   }
 }
 
@@ -1201,7 +1283,7 @@ const Textarea = forwardRef((props, ref) => {
   const [text, setText] = useState(ref.current?.value || '');
   const { maxCharacters, performSearch = () => {}, ...textareaProps } = props;
   const snapStates = useSnapshot(states);
-  const charCount = snapStates.composerCharacterCount;
+  // const charCount = snapStates.composerCharacterCount;
 
   const customEmojis = useRef();
   useEffect(() => {
@@ -1290,6 +1372,7 @@ const Textarea = forwardRef((props, ref) => {
                   username,
                   acct,
                   emojis,
+                  history,
                 } = result;
                 const displayNameWithEmoji = emojifyText(displayName, emojis);
                 // const item = menuItem.cloneNode();
@@ -1308,9 +1391,18 @@ const Textarea = forwardRef((props, ref) => {
                     </li>
                   `;
                 } else {
+                  const total = history?.reduce?.(
+                    (acc, cur) => acc + +cur.uses,
+                    0,
+                  );
                   html += `
                     <li role="option" data-value="${encodeHTML(name)}">
-                      <span>#<b>${encodeHTML(name)}</b></span>
+                      <span class="grow">#<b>${encodeHTML(name)}</b></span>
+                      ${
+                        total
+                          ? `<span class="count">${shortenNumber(total)}</span>`
+                          : ''
+                      }
                     </li>
                   `;
                 }
@@ -1348,6 +1440,11 @@ const Textarea = forwardRef((props, ref) => {
       handleCommited = (e) => {
         const { input } = e.detail;
         setText(input.value);
+        // fire input event
+        if (ref.current) {
+          const event = new Event('input', { bubbles: true });
+          ref.current.dispatchEvent(event);
+        }
       };
 
       textExpanderRef.current.addEventListener(
@@ -1374,9 +1471,55 @@ const Textarea = forwardRef((props, ref) => {
     };
   }, []);
 
+  useEffect(() => {
+    // Resize observer for textarea
+    const textarea = ref.current;
+    if (!textarea) return;
+    const resizeObserver = new ResizeObserver(() => {
+      // Get height of textarea, set height to textExpander
+      if (textExpanderRef.current) {
+        const { height } = textarea.getBoundingClientRect();
+        textExpanderRef.current.style.height = height + 'px';
+      }
+    });
+    resizeObserver.observe(textarea);
+  }, []);
+
+  const slowHighlightPerf = useRef(0); // increment if slow
+  const composeHighlightRef = useRef();
+  const throttleHighlightText = useThrottledCallback((text) => {
+    if (!composeHighlightRef.current) return;
+    if (slowHighlightPerf.current > 3) {
+      // After 3 times of lag, disable highlighting
+      composeHighlightRef.current.innerHTML = '';
+      composeHighlightRef.current = null; // Destroy the whole thing
+      throttleHighlightText?.cancel?.();
+      return;
+    }
+    let start;
+    let end;
+    if (slowHighlightPerf.current <= 3) start = Date.now();
+    composeHighlightRef.current.innerHTML =
+      highlightText(text, {
+        maxCharacters,
+      }) + '\n';
+    if (slowHighlightPerf.current <= 3) end = Date.now();
+    console.debug('HIGHLIGHT PERF', { start, end, diff: end - start });
+    if (start && end && end - start > 50) {
+      // if slow, increment
+      slowHighlightPerf.current++;
+    }
+    // Newline to prevent multiple line breaks at the end from being collapsed, no idea why
+  }, 500);
+
   return (
-    <text-expander ref={textExpanderRef} keys="@ # :">
+    <text-expander
+      ref={textExpanderRef}
+      keys="@ # :"
+      class="compose-field-container"
+    >
       <textarea
+        class="compose-field"
         autoCapitalize="sentences"
         autoComplete="on"
         autoCorrect="on"
@@ -1416,6 +1559,7 @@ const Textarea = forwardRef((props, ref) => {
                     target.setRangeText('', pos, selectionStart);
                   }
                   autoResizeTextarea(target);
+                  target.dispatchEvent(new Event('input'));
                 }
               }
             } catch (e) {
@@ -1423,18 +1567,34 @@ const Textarea = forwardRef((props, ref) => {
               console.error(e);
             }
           }
+          if (composeHighlightRef.current) {
+            composeHighlightRef.current.scrollTop = target.scrollTop;
+          }
         }}
         onInput={(e) => {
           const { target } = e;
-          setText(target.value);
+          const text = target.value;
+          setText(text);
           autoResizeTextarea(target);
           props.onInput?.(e);
+          throttleHighlightText(text);
         }}
         style={{
           width: '100%',
           height: '4em',
-          '--text-weight': (1 + charCount / 140).toFixed(1) || 1,
+          // '--text-weight': (1 + charCount / 140).toFixed(1) || 1,
         }}
+        onScroll={(e) => {
+          if (composeHighlightRef.current) {
+            const { scrollTop } = e.target;
+            composeHighlightRef.current.scrollTop = scrollTop;
+          }
+        }}
+      />
+      <div
+        ref={composeHighlightRef}
+        class="compose-highlight"
+        aria-hidden="true"
       />
     </text-expander>
   );
@@ -1477,7 +1637,11 @@ function MediaAttachment({
   onRemove = () => {},
 }) {
   const supportsEdit = supports('@mastodon/edit-media-attributes');
-  const { url, type, id } = attachment;
+  const { type, id, file } = attachment;
+  const url = useMemo(
+    () => (file ? URL.createObjectURL(file) : attachment.url),
+    [file, attachment.url],
+  );
   console.log({ attachment });
   const [description, setDescription] = useState(attachment.description);
   const suffixType = type.split('/')[0];
@@ -1544,6 +1708,7 @@ function MediaAttachment({
       <div class="media-attachment">
         <div
           class="media-preview"
+          tabIndex="0"
           onClick={() => {
             setShowModal(true);
           }}
@@ -1570,6 +1735,7 @@ function MediaAttachment({
       </div>
       {showModal && (
         <Modal
+          class="light"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setShowModal(false);
@@ -1607,7 +1773,20 @@ function MediaAttachment({
                   <audio src={url} controls />
                 ) : null}
               </div>
-              {descTextarea}
+              <div class="media-form">
+                {descTextarea}
+                <footer>
+                  <button
+                    type="button"
+                    class="light block"
+                    onClick={() => {
+                      setShowModal(false);
+                    }}
+                  >
+                    Done
+                  </button>
+                </footer>
+              </div>
             </main>
           </div>
         </Modal>

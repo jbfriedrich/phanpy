@@ -9,11 +9,11 @@ import {
   MenuItem,
 } from '@szhsin/react-menu';
 import { decodeBlurHash } from 'fast-blurhash';
-import mem from 'mem';
 import pThrottle from 'p-throttle';
 import { memo } from 'preact/compat';
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -28,6 +28,7 @@ import { snapshot } from 'valtio/vanilla';
 import AccountBlock from '../components/account-block';
 import EmojiText from '../components/emoji-text';
 import Loader from '../components/loader';
+import Menu2 from '../components/menu2';
 import MenuConfirm from '../components/menu-confirm';
 import Modal from '../components/modal';
 import NameText from '../components/name-text';
@@ -35,6 +36,8 @@ import Poll from '../components/poll';
 import { api } from '../utils/api';
 import emojifyText from '../utils/emojify-text';
 import enhanceContent from '../utils/enhance-content';
+import FilterContext from '../utils/filter-context';
+import { isFiltered } from '../utils/filters';
 import getTranslateTargetLanguage from '../utils/get-translate-target-language';
 import getHTMLText from '../utils/getHTMLText';
 import handleContentLinks from '../utils/handle-content-links';
@@ -42,6 +45,8 @@ import htmlContentLength from '../utils/html-content-length';
 import isMastodonLinkMaybe from '../utils/isMastodonLinkMaybe';
 import localeMatch from '../utils/locale-match';
 import niceDateTime from '../utils/nice-date-time';
+import openCompose from '../utils/open-compose';
+import pmem from '../utils/pmem';
 import safeBoundingBoxPadding from '../utils/safe-bounding-box-padding';
 import shortenNumber from '../utils/shorten-number';
 import showToast from '../utils/show-toast';
@@ -60,6 +65,7 @@ import MenuLink from './menu-link';
 import RelativeTime from './relative-time';
 import TranslationBlock from './translation-block';
 
+const SHOW_COMMENT_COUNT_LIMIT = 280;
 const INLINE_TRANSLATE_LIMIT = 140;
 const throttle = pThrottle({
   limit: 1,
@@ -67,13 +73,9 @@ const throttle = pThrottle({
 });
 
 function fetchAccount(id, masto) {
-  try {
-    return masto.v1.accounts.fetch(id);
-  } catch (e) {
-    return Promise.reject(e);
-  }
+  return masto.v1.accounts.$select(id).fetch();
 }
-const memFetchAccount = mem(fetchAccount);
+const memFetchAccount = pmem(fetchAccount);
 
 const visibilityText = {
   public: 'Public',
@@ -81,6 +83,10 @@ const visibilityText = {
   private: 'Followers only',
   direct: 'Private mention',
 };
+
+const isIOS =
+  window.ontouchstart !== undefined &&
+  /iPad|iPhone|iPod/.test(navigator.userAgent);
 
 function Status({
   statusID,
@@ -94,10 +100,11 @@ function Status({
   enableTranslate,
   forceTranslate: _forceTranslate,
   previewMode,
-  allowFilters,
+  // allowFilters,
   onMediaClick,
   quoted,
   onStatusLinkClick = () => {},
+  enableCommentHint,
 }) {
   if (skeleton) {
     return (
@@ -170,8 +177,23 @@ function Status({
     // Non-API props
     _deleted,
     _pinned,
-    _filtered,
+    // _filtered,
   } = status;
+
+  const currentAccount = useMemo(() => {
+    return store.session.get('currentAccount');
+  }, []);
+  const isSelf = useMemo(() => {
+    return currentAccount && currentAccount === accountId;
+  }, [accountId, currentAccount]);
+
+  const filterContext = useContext(FilterContext);
+  const filterInfo =
+    !isSelf && !readOnly && !previewMode && isFiltered(filtered, filterContext);
+
+  if (filterInfo?.action === 'hide') {
+    return null;
+  }
 
   console.debug('RENDER Status', id, status?.account.displayName, quoted);
 
@@ -183,11 +205,11 @@ function Status({
     }
   };
 
-  if (allowFilters && size !== 'l' && _filtered) {
+  if (/*allowFilters && */ size !== 'l' && filterInfo) {
     return (
       <FilteredStatus
         status={status}
-        filterInfo={_filtered}
+        filterInfo={filterInfo}
         instance={instance}
         containerProps={{
           onMouseEnter: debugHover,
@@ -198,13 +220,6 @@ function Status({
 
   const createdAtDate = new Date(createdAt);
   const editedAtDate = new Date(editedAt);
-
-  const currentAccount = useMemo(() => {
-    return store.session.get('currentAccount');
-  }, []);
-  const isSelf = useMemo(() => {
-    return currentAccount && currentAccount === accountId;
-  }, [accountId, currentAccount]);
 
   let inReplyToAccountRef = mentions?.find(
     (mention) => mention.id === inReplyToAccountId,
@@ -242,7 +257,11 @@ function Status({
 
     if (group) {
       return (
-        <div class="status-group" onMouseEnter={debugHover}>
+        <div
+          data-state-post-id={sKey}
+          class="status-group"
+          onMouseEnter={debugHover}
+        >
           <div class="status-pre-meta">
             <Icon icon="group" size="l" alt="Group" />{' '}
             <NameText account={status.account} instance={instance} showAvatar />
@@ -253,13 +272,18 @@ function Status({
             instance={instance}
             size={size}
             contentTextWeight={contentTextWeight}
+            readOnly={readOnly}
           />
         </div>
       );
     }
 
     return (
-      <div class="status-reblog" onMouseEnter={debugHover}>
+      <div
+        data-state-post-id={sKey}
+        class="status-reblog"
+        onMouseEnter={debugHover}
+      >
         <div class="status-pre-meta">
           <Icon icon="rocket" size="l" />{' '}
           <NameText account={status.account} instance={instance} showAvatar />{' '}
@@ -271,6 +295,8 @@ function Status({
           instance={instance}
           size={size}
           contentTextWeight={contentTextWeight}
+          readOnly={readOnly}
+          enableCommentHint
         />
       </div>
     );
@@ -352,9 +378,16 @@ function Status({
     canBoost = true;
   }
 
-  const replyStatus = () => {
+  const replyStatus = (e) => {
     if (!sameInstance || !authenticated) {
       return alert(unauthInteractionErrorMessage);
+    }
+    // syntheticEvent comes from MenuItem
+    if (e?.shiftKey || e?.syntheticEvent?.shiftKey) {
+      const newWin = openCompose({
+        replyToStatus: status,
+      });
+      if (newWin) return;
     }
     states.showCompose = {
       replyToStatus: status,
@@ -390,11 +423,11 @@ function Status({
         reblogsCount: reblogsCount + (reblogged ? -1 : 1),
       };
       if (reblogged) {
-        const newStatus = await masto.v1.statuses.unreblog(id);
+        const newStatus = await masto.v1.statuses.$select(id).unreblog();
         saveStatus(newStatus, instance);
         return true;
       } else {
-        const newStatus = await masto.v1.statuses.reblog(id);
+        const newStatus = await masto.v1.statuses.$select(id).reblog();
         saveStatus(newStatus, instance);
         return true;
       }
@@ -418,11 +451,11 @@ function Status({
         reblogsCount: reblogsCount + (reblogged ? -1 : 1),
       };
       if (reblogged) {
-        const newStatus = await masto.v1.statuses.unreblog(id);
+        const newStatus = await masto.v1.statuses.$select(id).unreblog();
         saveStatus(newStatus, instance);
         return true;
       } else {
-        const newStatus = await masto.v1.statuses.reblog(id);
+        const newStatus = await masto.v1.statuses.$select(id).reblog();
         saveStatus(newStatus, instance);
         return true;
       }
@@ -446,10 +479,10 @@ function Status({
         favouritesCount: favouritesCount + (favourited ? -1 : 1),
       };
       if (favourited) {
-        const newStatus = await masto.v1.statuses.unfavourite(id);
+        const newStatus = await masto.v1.statuses.$select(id).unfavourite();
         saveStatus(newStatus, instance);
       } else {
-        const newStatus = await masto.v1.statuses.favourite(id);
+        const newStatus = await masto.v1.statuses.$select(id).favourite();
         saveStatus(newStatus, instance);
       }
     } catch (e) {
@@ -470,10 +503,10 @@ function Status({
         bookmarked: !bookmarked,
       };
       if (bookmarked) {
-        const newStatus = await masto.v1.statuses.unbookmark(id);
+        const newStatus = await masto.v1.statuses.$select(id).unbookmark();
         saveStatus(newStatus, instance);
       } else {
-        const newStatus = await masto.v1.statuses.bookmark(id);
+        const newStatus = await masto.v1.statuses.$select(id).bookmark();
         saveStatus(newStatus, instance);
       }
     } catch (e) {
@@ -504,7 +537,7 @@ function Status({
             <span class="ib">
               {repliesCount > 0 && (
                 <span>
-                  <Icon icon="reply" alt="Replies" size="s" />{' '}
+                  <Icon icon="comment2" alt="Replies" size="s" />{' '}
                   <span>{shortenNumber(repliesCount)}</span>
                 </span>
               )}{' '}
@@ -516,7 +549,7 @@ function Status({
               )}{' '}
               {favouritesCount > 0 && (
                 <span>
-                  <Icon icon="heart" alt="Favourites" size="s" />{' '}
+                  <Icon icon="heart" alt="Likes" size="s" />{' '}
                   <span>{shortenNumber(favouritesCount)}</span>
                 </span>
               )}
@@ -554,7 +587,7 @@ function Status({
         <MenuItem onClick={() => setShowReactions(true)}>
           <Icon icon="react" />
           <span>
-            Boosted/Favourited by<span class="more-insignificant">…</span>
+            Boosted/Liked by<span class="more-insignificant">…</span>
           </span>
         </MenuItem>
       )}
@@ -583,7 +616,11 @@ function Status({
                 try {
                   const done = await confirmBoostStatus();
                   if (!isSizeLarge && done) {
-                    showToast(reblogged ? 'Unboosted' : 'Boosted');
+                    showToast(
+                      reblogged
+                        ? `Unboosted @${username || acct}'s post`
+                        : `Boosted @${username || acct}'s post`,
+                    );
                   }
                 } catch (e) {}
               }}
@@ -601,7 +638,11 @@ function Status({
                 try {
                   favouriteStatus();
                   if (!isSizeLarge) {
-                    showToast(favourited ? 'Unfavourited' : 'Favourited');
+                    showToast(
+                      favourited
+                        ? `Unliked @${username || acct}'s post`
+                        : `Liked @${username || acct}'s post`,
+                    );
                   }
                 } catch (e) {}
               }}
@@ -612,7 +653,7 @@ function Status({
                   color: favourited && 'var(--favourite-color)',
                 }}
               />
-              <span>{favourited ? 'Unfavourite' : 'Favourite'}</span>
+              <span>{favourited ? 'Unlike' : 'Like'}</span>
             </MenuItem>
           </div>
           <div class="menu-horizontal">
@@ -625,7 +666,11 @@ function Status({
                 try {
                   bookmarkStatus();
                   if (!isSizeLarge) {
-                    showToast(bookmarked ? 'Unbookmarked' : 'Bookmarked');
+                    showToast(
+                      bookmarked
+                        ? `Unbookmarked @${username || acct}'s post`
+                        : `Bookmarked @${username || acct}'s post`,
+                    );
                   }
                 } catch (e) {}
               }}
@@ -708,9 +753,9 @@ function Status({
         <MenuItem
           onClick={async () => {
             try {
-              const newStatus = await masto.v1.statuses[
-                muted ? 'unmute' : 'mute'
-              ](id);
+              const newStatus = await masto.v1.statuses
+                .$select(id)
+                [muted ? 'unmute' : 'mute']();
               saveStatus(newStatus, instance);
               showToast(muted ? 'Conversation unmuted' : 'Conversation muted');
             } catch (e) {
@@ -763,7 +808,7 @@ function Status({
                 // if (yes) {
                 (async () => {
                   try {
-                    await masto.v1.statuses.remove(id);
+                    await masto.v1.statuses.$select(id).remove();
                     const cachedStatus = getStatus(id, instance);
                     cachedStatus._deleted = true;
                     showToast('Deleted');
@@ -786,17 +831,14 @@ function Status({
 
   const contextMenuRef = useRef();
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
-  const [contextMenuAnchorPoint, setContextMenuAnchorPoint] = useState({
-    x: 0,
-    y: 0,
-  });
-  const isIOS =
-    window.ontouchstart !== undefined &&
-    /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const [contextMenuProps, setContextMenuProps] = useState({});
+
+  const showContextMenu = !isSizeLarge && !previewMode && !_deleted && !quoted;
+
   // Only iOS/iPadOS browsers don't support contextmenu
   // Some comments report iPadOS might support contextmenu if a mouse is connected
   const bindLongPressContext = useLongPress(
-    isIOS
+    isIOS && showContextMenu
       ? (e) => {
           if (e.pointerType === 'mouse') return;
           // There's 'pen' too, but not sure if contextmenu event would trigger from a pen
@@ -806,9 +848,12 @@ function Status({
           const link = e.target.closest('a');
           if (link && /^https?:\/\//.test(link.getAttribute('href'))) return;
           e.preventDefault();
-          setContextMenuAnchorPoint({
-            x: clientX,
-            y: clientY,
+          setContextMenuProps({
+            anchorPoint: {
+              x: clientX,
+              y: clientY,
+            },
+            direction: 'right',
           });
           setIsContextMenuOpen(true);
         }
@@ -821,19 +866,21 @@ function Status({
     },
   );
 
-  const showContextMenu = size !== 'l' && !previewMode && !_deleted && !quoted;
-
   const hotkeysEnabled = !readOnly && !previewMode;
-  const rRef = useHotkeys('r', replyStatus, {
+  const rRef = useHotkeys('r, shift+r', replyStatus, {
     enabled: hotkeysEnabled,
   });
   const fRef = useHotkeys(
-    'f',
+    'f, l',
     () => {
       try {
         favouriteStatus();
         if (!isSizeLarge) {
-          showToast(favourited ? 'Unfavourited' : 'Favourited');
+          showToast(
+            favourited
+              ? `Unliked @${username || acct}'s post`
+              : `Liked @${username || acct}'s post`,
+          );
         }
       } catch (e) {}
     },
@@ -847,7 +894,11 @@ function Status({
       try {
         bookmarkStatus();
         if (!isSizeLarge) {
-          showToast(bookmarked ? 'Unbookmarked' : 'Bookmarked');
+          showToast(
+            bookmarked
+              ? `Unbookmarked @${username || acct}'s post`
+              : `Bookmarked @${username || acct}'s post`,
+          );
         }
       } catch (e) {}
     },
@@ -862,7 +913,11 @@ function Status({
         try {
           const done = await confirmBoostStatus();
           if (!isSizeLarge && done) {
-            showToast(reblogged ? 'Unboosted' : 'Boosted');
+            showToast(
+              reblogged
+                ? `Unboosted @${username || acct}'s post`
+                : `Boosted @${username || acct}'s post`,
+            );
           }
         } catch (e) {}
       })();
@@ -872,8 +927,139 @@ function Status({
     },
   );
 
+  const displayedMediaAttachments = mediaAttachments.slice(
+    0,
+    isSizeLarge ? undefined : 4,
+  );
+  const showMultipleMediaCaptions =
+    mediaAttachments.length > 1 &&
+    displayedMediaAttachments.some(
+      (media) => !!media.description && !isMediaCaptionLong(media.description),
+    );
+  const captionChildren = useMemo(() => {
+    if (!showMultipleMediaCaptions) return null;
+    const attachments = [];
+    displayedMediaAttachments.forEach((media, i) => {
+      if (!media.description) return;
+      const index = attachments.findIndex(
+        (attachment) => attachment.media.description === media.description,
+      );
+      if (index === -1) {
+        attachments.push({
+          media,
+          indices: [i],
+        });
+      } else {
+        attachments[index].indices.push(i);
+      }
+    });
+    return attachments.map(({ media, indices }) => (
+      <div
+        key={media.id}
+        data-caption-index={indices.map((i) => i + 1).join(' ')}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          states.showMediaAlt = {
+            alt: media.description,
+            lang: language,
+          };
+        }}
+        title={media.description}
+      >
+        <sup>{indices.map((i) => i + 1).join(' ')}</sup> {media.description}
+      </div>
+    ));
+
+    // return displayedMediaAttachments.map(
+    //   (media, i) =>
+    //     !!media.description && (
+    //       <div
+    //         key={media.id}
+    //         data-caption-index={i + 1}
+    //         onClick={(e) => {
+    //           e.preventDefault();
+    //           e.stopPropagation();
+    //           states.showMediaAlt = {
+    //             alt: media.description,
+    //             lang: language,
+    //           };
+    //         }}
+    //         title={media.description}
+    //       >
+    //         <sup>{i + 1}</sup> {media.description}
+    //       </div>
+    //     ),
+    // );
+  }, [showMultipleMediaCaptions, displayedMediaAttachments, language]);
+
+  const isThread = useMemo(() => {
+    return (
+      (!!inReplyToId && inReplyToAccountId === status.account?.id) ||
+      !!snapStates.statusThreadNumber[sKey]
+    );
+  }, [
+    inReplyToId,
+    inReplyToAccountId,
+    status.account?.id,
+    snapStates.statusThreadNumber[sKey],
+  ]);
+
+  const showCommentHint = useMemo(() => {
+    return (
+      enableCommentHint &&
+      !isThread &&
+      !withinContext &&
+      !inReplyToId &&
+      visibility === 'public' &&
+      repliesCount > 0
+    );
+  }, [
+    enableCommentHint,
+    isThread,
+    withinContext,
+    inReplyToId,
+    repliesCount,
+    visibility,
+  ]);
+  const showCommentCount = useMemo(() => {
+    if (
+      card ||
+      poll ||
+      sensitive ||
+      spoilerText ||
+      mediaAttachments?.length ||
+      isThread ||
+      withinContext ||
+      inReplyToId ||
+      repliesCount <= 0
+    ) {
+      return false;
+    }
+    const questionRegex = /[??？︖❓❔⁇⁈⁉¿‽؟]/;
+    const containsQuestion = questionRegex.test(content);
+    if (!containsQuestion) return false;
+    const contentLength = htmlContentLength(content);
+    if (contentLength > 0 && contentLength <= SHOW_COMMENT_COUNT_LIMIT) {
+      return true;
+    }
+  }, [
+    card,
+    poll,
+    sensitive,
+    spoilerText,
+    mediaAttachments,
+    reblog,
+    isThread,
+    withinContext,
+    inReplyToId,
+    repliesCount,
+    content,
+  ]);
+
   return (
     <article
+      data-state-post-id={sKey}
       ref={(node) => {
         statusRef.current = node;
         // Use parent node if it's in focus
@@ -910,9 +1096,12 @@ function Status({
         const link = e.target.closest('a');
         if (link && /^https?:\/\//.test(link.getAttribute('href'))) return;
         e.preventDefault();
-        setContextMenuAnchorPoint({
-          x: e.clientX,
-          y: e.clientY,
+        setContextMenuProps({
+          anchorPoint: {
+            x: e.clientX,
+            y: e.clientY,
+          },
+          direction: 'right',
         });
         setIsContextMenuOpen(true);
       }}
@@ -922,8 +1111,7 @@ function Status({
         <ControlledMenu
           ref={contextMenuRef}
           state={isContextMenuOpen ? 'open' : undefined}
-          anchorPoint={contextMenuAnchorPoint}
-          direction="right"
+          {...contextMenuProps}
           onClose={(e) => {
             setIsContextMenuOpen(false);
             // statusRef.current?.focus?.();
@@ -1000,49 +1188,97 @@ function Status({
             (_deleted ? (
               <span class="status-deleted-tag">Deleted</span>
             ) : url && !previewMode && !quoted ? (
-              <Menu
-                instanceRef={menuInstanceRef}
-                portal={{
-                  target: document.body,
+              <Link
+                to={instance ? `/${instance}/s/${id}` : `/s/${id}`}
+                onClick={(e) => {
+                  if (
+                    e.metaKey ||
+                    e.ctrlKey ||
+                    e.shiftKey ||
+                    e.altKey ||
+                    e.which === 2
+                  ) {
+                    return;
+                  }
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onStatusLinkClick?.(e, status);
+                  setContextMenuProps({
+                    anchorRef: {
+                      current: e.currentTarget,
+                    },
+                    align: 'end',
+                    direction: 'bottom',
+                    gap: 4,
+                  });
+                  setIsContextMenuOpen(true);
                 }}
-                containerProps={{
-                  style: {
-                    // Higher than the backdrop
-                    zIndex: 1001,
-                  },
-                  onClick: (e) => {
-                    if (e.target === e.currentTarget)
-                      menuInstanceRef.current?.closeMenu?.();
-                  },
-                }}
-                align="end"
-                gap={4}
-                overflow="auto"
-                viewScroll="close"
-                boundingBoxPadding="8 8 8 8"
-                unmountOnClose
-                menuButton={({ open }) => (
-                  <Link
-                    to={instance ? `/${instance}/s/${id}` : `/s/${id}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onStatusLinkClick?.(e, status);
-                    }}
-                    class={`time ${open ? 'is-open' : ''}`}
-                  >
-                    <Icon
-                      icon={visibilityIconsMap[visibility]}
-                      alt={visibilityText[visibility]}
-                      size="s"
-                    />{' '}
-                    <RelativeTime datetime={createdAtDate} format="micro" />
-                  </Link>
-                )}
+                class={`time ${
+                  isContextMenuOpen && contextMenuProps?.anchorRef
+                    ? 'is-open'
+                    : ''
+                }`}
               >
-                {StatusMenuItems}
-              </Menu>
+                {showCommentHint && !showCommentCount ? (
+                  <Icon
+                    icon="comment2"
+                    size="s"
+                    alt={`${repliesCount} ${
+                      repliesCount === 1 ? 'reply' : 'replies'
+                    }`}
+                  />
+                ) : (
+                  <Icon
+                    icon={visibilityIconsMap[visibility]}
+                    alt={visibilityText[visibility]}
+                    size="s"
+                  />
+                )}{' '}
+                <RelativeTime datetime={createdAtDate} format="micro" />
+              </Link>
             ) : (
+              // <Menu
+              //   instanceRef={menuInstanceRef}
+              //   portal={{
+              //     target: document.body,
+              //   }}
+              //   containerProps={{
+              //     style: {
+              //       // Higher than the backdrop
+              //       zIndex: 1001,
+              //     },
+              //     onClick: (e) => {
+              //       if (e.target === e.currentTarget)
+              //         menuInstanceRef.current?.closeMenu?.();
+              //     },
+              //   }}
+              //   align="end"
+              //   gap={4}
+              //   overflow="auto"
+              //   viewScroll="close"
+              //   boundingBoxPadding="8 8 8 8"
+              //   unmountOnClose
+              //   menuButton={({ open }) => (
+              //     <Link
+              //       to={instance ? `/${instance}/s/${id}` : `/s/${id}`}
+              //       onClick={(e) => {
+              //         e.preventDefault();
+              //         e.stopPropagation();
+              //         onStatusLinkClick?.(e, status);
+              //       }}
+              //       class={`time ${open ? 'is-open' : ''}`}
+              //     >
+              //       <Icon
+              //         icon={visibilityIconsMap[visibility]}
+              //         alt={visibilityText[visibility]}
+              //         size="s"
+              //       />{' '}
+              //       <RelativeTime datetime={createdAtDate} format="micro" />
+              //     </Link>
+              //   )}
+              // >
+              //   {StatusMenuItems}
+              // </Menu>
               <span class="time">
                 <Icon
                   icon={visibilityIconsMap[visibility]}
@@ -1060,8 +1296,7 @@ function Status({
         )}
         {!withinContext && (
           <>
-            {(!!inReplyToId && inReplyToAccountId === status.account?.id) ||
-            !!snapStates.statusThreadNumber[sKey] ? (
+            {isThread ? (
               <div class="status-thread-badge">
                 <Icon icon="thread" size="s" />
                 Thread
@@ -1135,63 +1370,65 @@ function Status({
               </button>
             </>
           )}
-          <div class="content" ref={contentRef} data-read-more={readMoreText}>
-            <div
-              lang={language}
-              dir="auto"
-              class="inner-content"
-              onClick={handleContentLinks({
-                mentions,
-                instance,
-                previewMode,
-                statusURL: url,
-              })}
-              dangerouslySetInnerHTML={{
-                __html: enhanceContent(content, {
-                  emojis,
-                  postEnhanceDOM: (dom) => {
-                    // Remove target="_blank" from links
-                    dom
-                      .querySelectorAll('a.u-url[target="_blank"]')
-                      .forEach((a) => {
-                        if (!/http/i.test(a.innerText.trim())) {
-                          a.removeAttribute('target');
-                        }
-                      });
-                    if (previewMode) return;
-                    // Unfurl Mastodon links
-                    Array.from(
-                      dom.querySelectorAll(
-                        'a[href]:not(.u-url):not(.mention):not(.hashtag)',
-                      ),
-                    )
-                      .filter((a) => {
-                        const url = a.href;
-                        const isPostItself =
-                          url === status.url || url === status.uri;
-                        return !isPostItself && isMastodonLinkMaybe(url);
-                      })
-                      .forEach((a, i) => {
-                        unfurlMastodonLink(currentInstance, a.href).then(
-                          (result) => {
-                            if (!result) return;
+          {!!content && (
+            <div class="content" ref={contentRef} data-read-more={readMoreText}>
+              <div
+                lang={language}
+                dir="auto"
+                class="inner-content"
+                onClick={handleContentLinks({
+                  mentions,
+                  instance,
+                  previewMode,
+                  statusURL: url,
+                })}
+                dangerouslySetInnerHTML={{
+                  __html: enhanceContent(content, {
+                    emojis,
+                    postEnhanceDOM: (dom) => {
+                      // Remove target="_blank" from links
+                      dom
+                        .querySelectorAll('a.u-url[target="_blank"]')
+                        .forEach((a) => {
+                          if (!/http/i.test(a.innerText.trim())) {
                             a.removeAttribute('target');
-                            if (!sKey) return;
-                            if (!Array.isArray(states.statusQuotes[sKey])) {
-                              states.statusQuotes[sKey] = [];
-                            }
-                            if (!states.statusQuotes[sKey][i]) {
-                              states.statusQuotes[sKey].splice(i, 0, result);
-                            }
-                          },
-                        );
-                      });
-                  },
-                }),
-              }}
-            />
-            <QuoteStatuses id={id} instance={instance} level={quoted} />
-          </div>
+                          }
+                        });
+                      if (previewMode) return;
+                      // Unfurl Mastodon links
+                      Array.from(
+                        dom.querySelectorAll(
+                          'a[href]:not(.u-url):not(.mention):not(.hashtag)',
+                        ),
+                      )
+                        .filter((a) => {
+                          const url = a.href;
+                          const isPostItself =
+                            url === status.url || url === status.uri;
+                          return !isPostItself && isMastodonLinkMaybe(url);
+                        })
+                        .forEach((a, i) => {
+                          unfurlMastodonLink(currentInstance, a.href).then(
+                            (result) => {
+                              if (!result) return;
+                              a.removeAttribute('target');
+                              if (!sKey) return;
+                              if (!Array.isArray(states.statusQuotes[sKey])) {
+                                states.statusQuotes[sKey] = [];
+                              }
+                              if (!states.statusQuotes[sKey][i]) {
+                                states.statusQuotes[sKey].splice(i, 0, result);
+                              }
+                            },
+                          );
+                        });
+                    },
+                  }),
+                }}
+              />
+              <QuoteStatuses id={id} instance={instance} level={quoted} />
+            </div>
+          )}
           {!!poll && (
             <Poll
               lang={language}
@@ -1202,7 +1439,8 @@ function Status({
               }}
               refresh={() => {
                 return masto.v1.polls
-                  .fetch(poll.id)
+                  .$select(poll.id)
+                  .fetch()
                   .then((pollResponse) => {
                     states.statuses[sKey].poll = pollResponse;
                   })
@@ -1210,7 +1448,8 @@ function Status({
               }}
               votePoll={(choices) => {
                 return masto.v1.polls
-                  .vote(poll.id, {
+                  .$select(poll.id)
+                  .votes.create({
                     choices,
                   })
                   .then((pollResponse) => {
@@ -1268,36 +1507,8 @@ function Status({
           {!!mediaAttachments.length && (
             <MultipleMediaFigure
               lang={language}
-              enabled={
-                mediaAttachments.length > 1 &&
-                mediaAttachments.some(
-                  (media) =>
-                    !!media.description &&
-                    !isMediaCaptionLong(media.description),
-                )
-              }
-              captionChildren={() => {
-                return mediaAttachments.map(
-                  (media, i) =>
-                    !!media.description &&
-                    !isMediaCaptionLong(media.description) && (
-                      <div
-                        key={media.id}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          states.showMediaAlt = {
-                            alt: media.description,
-                            lang: language,
-                          };
-                        }}
-                        title={media.description}
-                      >
-                        <sup>{i + 1}</sup> {media.description}
-                      </div>
-                    ),
-                );
-              }}
+              enabled={showMultipleMediaCaptions}
+              captionChildren={captionChildren}
             >
               <div
                 ref={mediaContainerRef}
@@ -1305,33 +1516,28 @@ function Status({
                   mediaAttachments.length > 2 ? 'media-gt2' : ''
                 } ${mediaAttachments.length > 4 ? 'media-gt4' : ''}`}
               >
-                {mediaAttachments
-                  .slice(0, isSizeLarge ? undefined : 4)
-                  .map((media, i) => (
-                    <Media
-                      key={media.id}
-                      media={media}
-                      autoAnimate={isSizeLarge}
-                      showCaption={mediaAttachments.length === 1}
-                      lang={language}
-                      altIndex={
-                        mediaAttachments.length > 1 &&
-                        !!media.description &&
-                        !isMediaCaptionLong(media.description) &&
-                        i + 1
-                      }
-                      to={`/${instance}/s/${id}?${
-                        withinContext ? 'media' : 'media-only'
-                      }=${i + 1}`}
-                      onClick={
-                        onMediaClick
-                          ? (e) => {
-                              onMediaClick(e, i, media, status);
-                            }
-                          : undefined
-                      }
-                    />
-                  ))}
+                {displayedMediaAttachments.map((media, i) => (
+                  <Media
+                    key={media.id}
+                    media={media}
+                    autoAnimate={isSizeLarge}
+                    showCaption={mediaAttachments.length === 1}
+                    lang={language}
+                    altIndex={
+                      showMultipleMediaCaptions && !!media.description && i + 1
+                    }
+                    to={`/${instance}/s/${id}?${
+                      withinContext ? 'media' : 'media-only'
+                    }=${i + 1}`}
+                    onClick={
+                      onMediaClick
+                        ? (e) => {
+                            onMediaClick(e, i, media, status);
+                          }
+                        : undefined
+                    }
+                  />
+                ))}
               </div>
             </MultipleMediaFigure>
           )}
@@ -1347,6 +1553,11 @@ function Status({
               <Card card={card} instance={currentInstance} />
             )}
         </div>
+        {!isSizeLarge && showCommentCount && (
+          <div class="content-comment-hint insignificant">
+            <Icon icon="comment2" alt="Replies" /> {repliesCount}
+          </div>
+        )}
         {isSizeLarge && (
           <>
             <div class="extra-meta">
@@ -1371,6 +1582,7 @@ function Status({
                       {' '}
                       &bull; <Icon icon="pencil" alt="Edited" />{' '}
                       <time
+                        tabIndex="0"
                         class="edited"
                         datetime={editedAtDate.toISOString()}
                         onClick={() => {
@@ -1442,8 +1654,8 @@ function Status({
               <div class="action has-count">
                 <StatusButton
                   checked={favourited}
-                  title={['Favourite', 'Unfavourite']}
-                  alt={['Favourite', 'Favourited']}
+                  title={['Like', 'Unlike']}
+                  alt={['Like', 'Liked']}
                   class="favourite-button"
                   icon="heart"
                   count={favouritesCount}
@@ -1460,7 +1672,7 @@ function Status({
                   onClick={bookmarkStatus}
                 />
               </div>
-              <Menu
+              <Menu2
                 portal={{
                   target:
                     document.querySelector('.status-deck') || document.body,
@@ -1469,7 +1681,6 @@ function Status({
                 gap={4}
                 overflow="auto"
                 viewScroll="close"
-                boundingBoxPadding="8 8 8 8"
                 menuButton={
                   <div class="action">
                     <button
@@ -1483,17 +1694,18 @@ function Status({
                 }
               >
                 {StatusMenuItems}
-              </Menu>
+              </Menu2>
             </div>
           </>
         )}
       </div>
       {!!showEdited && (
         <Modal
+          class="light"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setShowEdited(false);
-              statusRef.current?.focus();
+              // statusRef.current?.focus();
             }
           }}
         >
@@ -1501,7 +1713,7 @@ function Status({
             statusID={showEdited}
             instance={instance}
             fetchStatusHistory={() => {
-              return masto.v1.statuses.listHistory(showEdited);
+              return masto.v1.statuses.$select(showEdited).history.list();
             }}
             onClose={() => {
               setShowEdited(false);
@@ -1537,7 +1749,7 @@ function MultipleMediaFigure(props) {
     <figure class="media-figure-multiple">
       {children}
       <figcaption lang={lang} dir="auto">
-        {captionChildren?.()}
+        {captionChildren}
       </figcaption>
     </figure>
   );
@@ -1551,14 +1763,18 @@ function Card({ card, instance }) {
     description,
     html,
     providerName,
+    providerUrl,
     authorName,
+    authorUrl,
     width,
     height,
     image,
+    imageDescription,
     url,
     type,
     embedUrl,
     language,
+    publishedAt,
   } = card;
 
   /* type
@@ -1584,7 +1800,7 @@ function Card({ card, instance }) {
         // NOTE: This is for quote post
         // (async () => {
         //   const { masto } = api({ instance });
-        //   const status = await masto.v1.statuses.fetch(id);
+        //   const status = await masto.v1.statuses.$select(id).fetch();
         //   saveStatus(status, instance);
         //   setCardStatusID(id);
         // })();
@@ -1601,7 +1817,9 @@ function Card({ card, instance }) {
   if (snapStates.unfurledLinks[url]) return null;
 
   if (hasText && (image || (type === 'photo' && blurhash))) {
-    const domain = new URL(url).hostname.replace(/^www\./, '');
+    const domain = new URL(url).hostname
+      .replace(/^www\./, '')
+      .replace(/\/$/, '');
     let blurhashImage;
     if (!image) {
       const w = 44;
@@ -1631,7 +1849,7 @@ function Card({ card, instance }) {
             width={width}
             height={height}
             loading="lazy"
-            alt=""
+            alt={imageDescription || ''}
             onError={(e) => {
               try {
                 e.target.style.display = 'none';
@@ -1647,7 +1865,10 @@ function Card({ card, instance }) {
             {title}
           </p>
           <p class="meta" dir="auto">
-            {description || providerName || authorName}
+            {description ||
+              (!!publishedAt && (
+                <RelativeTime datetime={publishedAt} format="micro" />
+              ))}
           </p>
         </div>
       </a>
@@ -1804,15 +2025,16 @@ function ReactionsModal({ statusID, instance, onClose }) {
     (async () => {
       try {
         if (firstLoad) {
-          reblogIterator.current = masto.v1.statuses.listRebloggedBy(statusID, {
-            limit: REACTIONS_LIMIT,
-          });
-          favouriteIterator.current = masto.v1.statuses.listFavouritedBy(
-            statusID,
-            {
+          reblogIterator.current = masto.v1.statuses
+            .$select(statusID)
+            .rebloggedBy.list({
               limit: REACTIONS_LIMIT,
-            },
-          );
+            });
+          favouriteIterator.current = masto.v1.statuses
+            .$select(statusID)
+            .favouritedBy.list({
+              limit: REACTIONS_LIMIT,
+            });
         }
         const [{ value: reblogResults }, { value: favouriteResults }] =
           await Promise.allSettled([
@@ -1871,7 +2093,7 @@ function ReactionsModal({ statusID, instance, onClose }) {
         </button>
       )}
       <header>
-        <h2>Boosted/Favourited by…</h2>
+        <h2>Boosted/Liked by…</h2>
       </header>
       <main>
         {accounts.length > 0 ? (
@@ -2029,11 +2251,30 @@ function _unfurlMastodonLink(instance, url) {
 
   let remoteInstanceFetch;
   let theURL = url;
-  if (/\/\/elk\.[^\/]+\/[^.]+\.[^.]+/i.test(theURL)) {
-    // E.g. https://elk.zone/domain.com/@stest/123 -> https://domain.com/@stest/123
+
+  // https://elk.zone/domain.com/@stest/123 -> https://domain.com/@stest/123
+  if (/\/\/elk\.[^\/]+\/[^\/]+\.[^\/]+/i.test(theURL)) {
     theURL = theURL.replace(/elk\.[^\/]+\//i, '');
   }
-  const urlObj = new URL(theURL);
+
+  // https://trunks.social/status/domain.com/@stest/123 -> https://domain.com/@stest/123
+  if (/\/\/trunks\.[^\/]+\/status\/[^\/]+\.[^\/]+/i.test(theURL)) {
+    theURL = theURL.replace(/trunks\.[^\/]+\/status\//i, '');
+  }
+
+  // https://phanpy.social/#/domain.com/s/123 -> https://domain.com/statuses/123
+  if (/\/#\/[^\/]+\.[^\/]+\/s\/.+/i.test(theURL)) {
+    const urlAfterHash = theURL.split('/#/')[1];
+    const finalURL = urlAfterHash.replace(/\/s\//i, '/@fakeUsername/');
+    theURL = `https://${finalURL}`;
+  }
+
+  let urlObj;
+  try {
+    urlObj = new URL(theURL);
+  } catch (e) {
+    return;
+  }
   const domain = urlObj.hostname;
   const path = urlObj.pathname;
   // Regex /:username/:id, where username = @username or @username@domain, id = number
@@ -2042,22 +2283,25 @@ function _unfurlMastodonLink(instance, url) {
   if (statusMatch) {
     const id = statusMatch[3];
     const { masto } = api({ instance: domain });
-    remoteInstanceFetch = masto.v1.statuses.fetch(id).then((status) => {
-      if (status?.id) {
-        return {
-          status,
-          instance: domain,
-        };
-      } else {
-        throw new Error('No results');
-      }
-    });
+    remoteInstanceFetch = masto.v1.statuses
+      .$select(id)
+      .fetch()
+      .then((status) => {
+        if (status?.id) {
+          return {
+            status,
+            instance: domain,
+          };
+        } else {
+          throw new Error('No results');
+        }
+      });
   }
 
   const { masto } = api({ instance });
-  const mastoSearchFetch = masto.v2
-    .search({
-      q: url,
+  const mastoSearchFetch = masto.v2.search
+    .fetch({
+      q: theURL,
       type: 'statuses',
       resolve: true,
       limit: 1,
@@ -2126,14 +2370,11 @@ function nicePostURL(url) {
   );
 }
 
-const unfurlMastodonLink = throttle(
-  mem(_unfurlMastodonLink, {
-    cacheKey: (instance, url) => `${instance}:${url}`,
-  }),
-);
+const unfurlMastodonLink = throttle(_unfurlMastodonLink);
 
 function FilteredStatus({ status, filterInfo, instance, containerProps = {} }) {
   const {
+    id: statusID,
     account: { avatar, avatarStatic, bot, group },
     createdAt,
     visibility,
@@ -2158,6 +2399,15 @@ function FilteredStatus({ status, filterInfo, instance, containerProps = {} }) {
   );
 
   const statusPeekRef = useTruncated();
+  const sKey =
+    statusKey(status.id, instance) +
+    ' ' +
+    (statusKey(reblog?.id, instance) || '');
+
+  const actualStatusID = reblog?.id || statusID;
+  const url = instance
+    ? `/${instance}/s/${actualStatusID}`
+    : `/s/${actualStatusID}`;
 
   return (
     <div
@@ -2170,7 +2420,7 @@ function FilteredStatus({ status, filterInfo, instance, containerProps = {} }) {
       }}
       {...bindLongPressPeek()}
     >
-      <article class="status filtered" tabindex="-1">
+      <article data-state-post-id={sKey} class="status filtered" tabindex="-1">
         <b
           class="status-filtered-badge clickable badge-meta"
           title={filterTitleStr}
@@ -2234,7 +2484,7 @@ function FilteredStatus({ status, filterInfo, instance, containerProps = {} }) {
               <Link
                 ref={statusPeekRef}
                 class="status-link"
-                to={`/${instance}/s/${status.id}`}
+                to={url}
                 onClick={() => {
                   setShowPeek(false);
                 }}
@@ -2275,6 +2525,7 @@ const QuoteStatuses = memo(({ id, instance, level = 0 }) => {
           instance={q.instance}
           size="s"
           quoted={level + 1}
+          enableCommentHint
         />
       </Link>
     );

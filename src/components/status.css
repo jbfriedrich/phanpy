@@ -337,7 +337,7 @@
 .status > .container > .meta a.time:after {
   content: '';
   position: absolute;
-  inset: -16px;
+  inset: -16px -16px -8px;
 }
 .status > .container > .meta .reply-to {
   opacity: 0.5;
@@ -520,6 +520,14 @@
   color: inherit;
 } */
 
+.status .content-comment-hint {
+  margin-top: 0.25em;
+  font-size: 90%;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
 .status.compact-thread .spoiler-badge {
   font-size: smaller;
   color: var(--button-bg-color);
@@ -603,6 +611,7 @@
   margin-block: min(0.75em, 12px);
   white-space: pre-wrap;
   tab-size: 2;
+  text-wrap: pretty;
 }
 .status .content p:first-child {
   margin-block-start: 0;
@@ -675,6 +684,24 @@
   /* min-height: 0 !important; */
   max-height: none !important;
 }
+.status-carousel .status .media-container:not(.status-card .media-container) {
+  margin-inline: -16px;
+  max-width: calc(100% + 16px + 16px) !important;
+
+  figure figcaption {
+    padding-inline: 16px !important;
+  }
+
+  &:not(.media-figure-multiple .media-container) {
+    margin-bottom: -16px;
+  }
+
+  .media {
+    --media-radius: 0;
+    --media-radius-inner: 0;
+    box-sizing: border-box;
+  }
+}
 .status:not(.large):not(.status-carousel .status)
   .media-container.media-eq1:has([data-orientation='portrait']) {
   width: 85%;
@@ -684,6 +711,17 @@
 .status .media-container.media-gt2 {
   /* height: 200px; */
   max-height: max(200px, 40vh);
+}
+.status.medium .content ~ * .media-container:is(.media-eq2, .media-gt2),
+.status.medium .content ~ .media-container:is(.media-eq2, .media-gt2) {
+  /* 50px = avatar size */
+  margin-left: calc(-1 * ((50px / 2)));
+  /*
+    outer padding = 16px
+    gap = 12px
+    so... 16 - 12 = 4
+  */
+  margin-right: -4px;
 }
 .status.large :is(.media-container, .media-container.media-gt2) {
   height: auto;
@@ -699,6 +737,7 @@
   overflow: hidden;
   min-height: 80px;
   border: var(--media-border-width) solid var(--outline-color);
+  vertical-align: top;
 }
 .status .media-container:not(.media-eq1) .media {
   aspect-ratio: auto !important;
@@ -713,10 +752,11 @@
     padding: 0;
     display: flex;
     flex-wrap: wrap;
-    align-items: flex-end;
+    /* align-items: flex-end; */
     column-gap: 4px;
 
     figcaption {
+      align-self: flex-end;
       padding: 4px;
       font-size: 90%;
       color: var(--text-insignificant-color);
@@ -725,6 +765,7 @@
       white-space: pre-line;
       flex-basis: 15em;
       flex-grow: 1;
+      text-wrap: pretty;
     }
   }
 
@@ -845,7 +886,7 @@
   object-fit: cover;
   vertical-align: middle;
 }
-.status .media {
+:is(.status, .media-post) .media {
   cursor: pointer;
 
   &[data-has-alt] {
@@ -884,7 +925,7 @@ body:has(#modal-container .carousel) .status .media img:hover {
   position: relative;
   background-clip: padding-box;
 }
-.status :is(.media-video, .media-audio) .media-play {
+:is(.status, .media-post) :is(.media-video, .media-audio) .media-play {
   pointer-events: none;
   width: 44px;
   height: 44px;
@@ -901,10 +942,13 @@ body:has(#modal-container .carousel) .status .media img:hover {
   border-radius: 70px;
   transition: transform 0.2s ease-in-out;
 }
-.status :is(.media-video, .media-audio):hover:not(:active) .media-play {
+:is(.status, .media-post)
+  :is(.media-video, .media-audio):hover:not(:active)
+  .media-play {
   transform: translate(-50%, -50%) scale(1.1);
 }
-.status :is(.media-video, .media-audio)[data-formatted-duration]:after {
+:is(.status, .media-post)
+  :is(.media-video, .media-audio)[data-formatted-duration]:after {
   font-size: 12px;
   pointer-events: none;
   content: attr(data-formatted-duration);
@@ -917,10 +961,10 @@ body:has(#modal-container .carousel) .status .media img:hover {
   border-radius: 4px;
   padding: 0 4px;
 }
-.status .media-audio[data-formatted-duration]:after {
+:is(.status, .media-post) .media-audio[data-formatted-duration]:after {
   content: '♬ ' attr(data-formatted-duration);
 }
-.status .media-gif[data-label]:not(:hover):after {
+:is(.status, .media-post) .media-gif[data-label]:not(:hover):after {
   font-size: 12px;
   font-weight: bold;
   pointer-events: none;
@@ -933,6 +977,28 @@ body:has(#modal-container .carousel) .status .media img:hover {
   border: var(--hairline-width) solid var(--media-outline-color);
   border-radius: 4px;
   padding: 0 4px;
+}
+.media-gif {
+  position: relative;
+
+  &:before {
+    content: '';
+    position: absolute;
+    top: auto !important;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background-color: var(--media-outline-color);
+    transform: translateX(calc(var(--progress, 0%) - 100%));
+    border-radius: 0 !important;
+    border: 0 !important;
+    border-right: 1px solid var(--media-fg-color) !important;
+    transition: transform 0.15s linear;
+  }
+  &:before {
+    height: 3px;
+  }
 }
 .status .media-gif video {
   object-fit: cover;
@@ -952,12 +1018,13 @@ body:has(#modal-container .carousel) .status .media img:hover {
 .status .media-audio audio {
   width: 100%;
 } */
-.status .media-audio {
+:is(.status, .media-post) .media-audio {
   width: 100%;
   height: 100%;
+  min-height: 88px;
   background-image: radial-gradient(
       circle at center center,
-      var(--bg-color),
+      transparent,
       var(--bg-faded-color)
     ),
     repeating-radial-gradient(
@@ -1019,12 +1086,37 @@ body:has(#modal-container .carousel) .status .media img:hover {
         color: var(--text-color);
         cursor: pointer;
       }
+
+      &:only-child {
+        white-space: pre-line;
+        overflow: auto;
+        text-overflow: unset;
+        display: flex;
+        gap: 4px;
+      }
     }
 
     sup {
       opacity: 0.75;
       font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
     }
+  }
+
+  /* Only 4, for now. Would be better if this is a for loop */
+  &:has(.media[data-has-alt]:nth-child(1):is(:hover, :focus))
+    figcaption
+    > div[data-caption-index~='1'],
+  &:has(.media[data-has-alt]:nth-child(2):is(:hover, :focus))
+    figcaption
+    > div[data-caption-index~='2'],
+  &:has(.media[data-has-alt]:nth-child(3):is(:hover, :focus))
+    figcaption
+    > div[data-caption-index~='3'],
+  &:has(.media[data-has-alt]:nth-child(4):is(:hover, :focus))
+    figcaption
+    > div[data-caption-index~='4'] {
+    color: var(--text-color);
   }
 }
 
@@ -1052,7 +1144,6 @@ body:has(#modal-container .carousel) .status .media img:hover {
   font-size: 90%;
   z-index: 1;
   text-shadow: 0 var(--hairline-width) var(--bg-color);
-  mix-blend-mode: luminosity;
   white-space: pre-line;
 
   &:is(:hover, :focus) {
@@ -1176,6 +1267,7 @@ a:focus-visible .card img {
   box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
+  text-wrap: balance;
 }
 .card .meta {
   font-size: smaller;
