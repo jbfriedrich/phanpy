@@ -1,16 +1,17 @@
 import './compose.css';
 
 import '@github/text-expander-element';
-import equal from 'fast-deep-equal';
+import { MenuItem } from '@szhsin/react-menu';
+import { deepEqual } from 'fast-equals';
 import { forwardRef } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { substring } from 'runes2';
 import stringLength from 'string-length';
 import { uid } from 'uid/single';
 import { useDebouncedCallback, useThrottledCallback } from 'use-debounce';
 import { useSnapshot } from 'valtio';
 
+import Menu2 from '../components/menu2';
 import supportedLanguages from '../data/status-supported-languages';
 import urlRegex from '../data/url-regex';
 import { api } from '../utils/api';
@@ -19,6 +20,7 @@ import emojifyText from '../utils/emojify-text';
 import localeMatch from '../utils/locale-match';
 import openCompose from '../utils/open-compose';
 import shortenNumber from '../utils/shorten-number';
+import showToast from '../utils/show-toast';
 import states, { saveStatus } from '../utils/states';
 import store from '../utils/store';
 import {
@@ -28,6 +30,7 @@ import {
   getCurrentInstanceConfiguration,
 } from '../utils/store-utils';
 import supports from '../utils/supports';
+import useCloseWatcher from '../utils/useCloseWatcher';
 import useInterval from '../utils/useInterval';
 import visibilityIconsMap from '../utils/visibility-icons-map';
 
@@ -37,6 +40,8 @@ import Icon from './icon';
 import Loader from './loader';
 import Modal from './modal';
 import Status from './status';
+
+const { PHANPY_IMG_ALT_API_URL: IMG_ALT_API_URL } = import.meta.env;
 
 const supportedLanguagesMap = supportedLanguages.reduce((acc, l) => {
   const [code, common, native] = l;
@@ -125,24 +130,38 @@ const SCAN_RE = new RegExp(
   'g',
 );
 
+const segmenter = new Intl.Segmenter();
 function highlightText(text, { maxCharacters = Infinity }) {
   // Accept text string, return formatted HTML string
-  let html = text;
+  // Escape all HTML special characters
+  let html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+
   // Exceeded characters limit
   const { composerCharacterCount } = states;
-  let leftoverHTML = '';
   if (composerCharacterCount > maxCharacters) {
-    // NOTE: runes2 substring considers surrogate pairs
-    // const leftoverCount = composerCharacterCount - maxCharacters;
     // Highlight exceeded characters
-    leftoverHTML =
-      '<mark class="compose-highlight-exceeded">' +
-      // html.slice(-leftoverCount) +
-      substring(html, maxCharacters) +
-      '</mark>';
-    // html = html.slice(0, -leftoverCount);
-    html = substring(html, 0, maxCharacters);
-    return html + leftoverHTML;
+    let withinLimitHTML = '',
+      exceedLimitHTML = '';
+    const htmlSegments = segmenter.segment(html);
+    for (const { segment, index } of htmlSegments) {
+      if (index < maxCharacters) {
+        withinLimitHTML += segment;
+      } else {
+        exceedLimitHTML += segment;
+      }
+    }
+    if (exceedLimitHTML) {
+      exceedLimitHTML =
+        '<mark class="compose-highlight-exceeded">' +
+        exceedLimitHTML +
+        '</mark>';
+    }
+    return withinLimitHTML + exceedLimitHTML;
   }
 
   return html
@@ -154,6 +173,8 @@ function highlightText(text, { maxCharacters = Infinity }) {
       '$1<mark class="compose-highlight-emoji-shortcode">$2</mark>',
     ); // Emoji shortcodes
 }
+
+const rtf = new Intl.RelativeTimeFormat();
 
 function Compose({
   onClose,
@@ -216,6 +237,12 @@ function Compose({
   };
   const focusTextarea = () => {
     setTimeout(() => {
+      if (!textareaRef.current) return;
+      // status starts with newline, focus on first position
+      if (draftStatus?.status?.startsWith?.('\n')) {
+        textareaRef.current.selectionStart = 0;
+        textareaRef.current.selectionEnd = 0;
+      }
       console.debug('FOCUS textarea');
       textareaRef.current?.focus();
     }, 300);
@@ -416,6 +443,7 @@ function Compose({
   };
   useEffect(updateCharCount, []);
 
+  const supportsCloseWatcher = window.CloseWatcher;
   const escDownRef = useRef(false);
   useHotkeys(
     'esc',
@@ -424,6 +452,7 @@ function Compose({
       // This won't be true if this event is already handled and not propagated 🤞
     },
     {
+      enabled: !supportsCloseWatcher,
       enableOnFormTags: true,
     },
   );
@@ -436,6 +465,7 @@ function Compose({
       escDownRef.current = false;
     },
     {
+      enabled: !supportsCloseWatcher,
       enableOnFormTags: true,
       // Use keyup because Esc keydown will close the confirm dialog on Safari
       keyup: true,
@@ -448,6 +478,11 @@ function Compose({
       },
     },
   );
+  useCloseWatcher(() => {
+    if (!standalone && confirmClose()) {
+      onClose();
+    }
+  }, [standalone, confirmClose, onClose]);
 
   const prevBackgroundDraft = useRef({});
   const draftKey = () => {
@@ -488,7 +523,10 @@ function Compose({
         mediaAttachments,
       },
     };
-    if (!equal(backgroundDraft, prevBackgroundDraft.current) && !canClose()) {
+    if (
+      !deepEqual(backgroundDraft, prevBackgroundDraft.current) &&
+      !canClose()
+    ) {
       console.debug('not equal', backgroundDraft, prevBackgroundDraft.current);
       db.drafts
         .set(key, {
@@ -600,6 +638,16 @@ function Compose({
     );
     return [topLanguages, restLanguages];
   }, [language]);
+
+  const replyToStatusMonthsAgo = useMemo(
+    () =>
+      !!replyToStatus?.createdAt &&
+      Math.floor(
+        (Date.now() - new Date(replyToStatus.createdAt)) /
+          (1000 * 60 * 60 * 24 * 30),
+      ),
+    [replyToStatus],
+  );
 
   return (
     <div id="compose-container-outer">
@@ -750,6 +798,16 @@ function Compose({
               Replying to @
               {replyToStatus.account.acct || replyToStatus.account.username}
               &rsquo;s post
+              {replyToStatusMonthsAgo >= 3 && (
+                <>
+                  {' '}
+                  (
+                  <strong>
+                    {rtf.format(-replyToStatusMonthsAgo, 'month')}
+                  </strong>
+                  )
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1230,7 +1288,6 @@ function Compose({
       </div>
       {showEmoji2Picker && (
         <Modal
-          class="light"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setShowEmoji2Picker(false);
@@ -1282,7 +1339,7 @@ const Textarea = forwardRef((props, ref) => {
   const { masto } = api();
   const [text, setText] = useState(ref.current?.value || '');
   const { maxCharacters, performSearch = () => {}, ...textareaProps } = props;
-  const snapStates = useSnapshot(states);
+  // const snapStates = useSnapshot(states);
   // const charCount = snapStates.composerCharacterCount;
 
   const customEmojis = useRef();
@@ -1534,7 +1591,7 @@ const Textarea = forwardRef((props, ref) => {
         onKeyDown={(e) => {
           // Get line before cursor position after pressing 'Enter'
           const { key, target } = e;
-          if (key === 'Enter') {
+          if (key === 'Enter' && !(e.ctrlKey || e.metaKey)) {
             try {
               const { value, selectionStart } = target;
               const textBeforeCursor = value.slice(0, selectionStart);
@@ -1636,6 +1693,7 @@ function MediaAttachment({
   onDescriptionChange = () => {},
   onRemove = () => {},
 }) {
+  const [uiState, setUIState] = useState('default');
   const supportsEdit = supports('@mastodon/edit-media-attributes');
   const { type, id, file } = attachment;
   const url = useMemo(
@@ -1644,7 +1702,7 @@ function MediaAttachment({
   );
   console.log({ attachment });
   const [description, setDescription] = useState(attachment.description);
-  const suffixType = type.split('/')[0];
+  const [suffixType, subtype] = type.split('/');
   const debouncedOnDescriptionChange = useDebouncedCallback(
     onDescriptionChange,
     250,
@@ -1690,7 +1748,8 @@ function MediaAttachment({
           autoCorrect="on"
           spellCheck="true"
           dir="auto"
-          disabled={disabled}
+          disabled={disabled || uiState === 'loading'}
+          class={uiState === 'loading' ? 'loading' : ''}
           maxlength="1500" // Not unicode-aware :(
           // TODO: Un-hard-code this maxlength, ref: https://github.com/mastodon/mastodon/blob/b59fb28e90bc21d6fd1a6bafd13cfbd81ab5be54/app/models/media_attachment.rb#L39
           onInput={(e) => {
@@ -1702,6 +1761,13 @@ function MediaAttachment({
       )}
     </>
   );
+
+  const toastRef = useRef(null);
+  useEffect(() => {
+    return () => {
+      toastRef.current?.hideToast?.();
+    };
+  }, []);
 
   return (
     <>
@@ -1735,7 +1801,6 @@ function MediaAttachment({
       </div>
       {showModal && (
         <Modal
-          class="light"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setShowModal(false);
@@ -1776,12 +1841,75 @@ function MediaAttachment({
               <div class="media-form">
                 {descTextarea}
                 <footer>
+                  {suffixType === 'image' &&
+                    /^(png|jpe?g|gif|webp)$/i.test(subtype) &&
+                    !!states.settings.mediaAltGenerator &&
+                    !!IMG_ALT_API_URL && (
+                      <Menu2
+                        portal={{
+                          target: document.body,
+                        }}
+                        containerProps={{
+                          style: {
+                            zIndex: 1001,
+                          },
+                        }}
+                        align="center"
+                        position="anchor"
+                        overflow="auto"
+                        menuButton={
+                          <button type="button" title="More" class="plain">
+                            <Icon icon="more" size="l" alt="More" />
+                          </button>
+                        }
+                      >
+                        <MenuItem
+                          disabled={uiState === 'loading'}
+                          onClick={() => {
+                            setUIState('loading');
+                            toastRef.current = showToast({
+                              text: 'Generating description. Please wait...',
+                              duration: -1,
+                            });
+                            // POST with multipart
+                            (async function () {
+                              try {
+                                const body = new FormData();
+                                body.append('image', file);
+                                const response = await fetch(IMG_ALT_API_URL, {
+                                  method: 'POST',
+                                  body,
+                                }).then((r) => r.json());
+                                if (response.error) {
+                                  throw new Error(response.error);
+                                }
+                                setDescription(response.description);
+                              } catch (e) {
+                                console.error(e);
+                                showToast(
+                                  `Failed to generate description${
+                                    e?.message ? `: ${e.message}` : ''
+                                  }`,
+                                );
+                              } finally {
+                                setUIState('default');
+                                toastRef.current?.hideToast?.();
+                              }
+                            })();
+                          }}
+                        >
+                          <Icon icon="sparkles2" />
+                          <span>Generate description…</span>
+                        </MenuItem>
+                      </Menu2>
+                    )}
                   <button
                     type="button"
                     class="light block"
                     onClick={() => {
                       setShowModal(false);
                     }}
+                    disabled={uiState === 'loading'}
                   >
                     Done
                   </button>

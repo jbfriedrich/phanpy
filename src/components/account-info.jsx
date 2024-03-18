@@ -35,24 +35,24 @@ import Modal from './modal';
 import TranslationBlock from './translation-block';
 
 const MUTE_DURATIONS = [
-  1000 * 60 * 5, // 5 minutes
-  1000 * 60 * 30, // 30 minutes
-  1000 * 60 * 60, // 1 hour
-  1000 * 60 * 60 * 6, // 6 hours
-  1000 * 60 * 60 * 24, // 1 day
-  1000 * 60 * 60 * 24 * 3, // 3 days
-  1000 * 60 * 60 * 24 * 7, // 1 week
+  60 * 5, // 5 minutes
+  60 * 30, // 30 minutes
+  60 * 60, // 1 hour
+  60 * 60 * 6, // 6 hours
+  60 * 60 * 24, // 1 day
+  60 * 60 * 24 * 3, // 3 days
+  60 * 60 * 24 * 7, // 1 week
   0, // forever
 ];
 const MUTE_DURATIONS_LABELS = {
   0: 'Forever',
-  300_000: '5 minutes',
-  1_800_000: '30 minutes',
-  3_600_000: '1 hour',
-  21_600_000: '6 hours',
-  86_400_000: '1 day',
-  259_200_000: '3 days',
-  604_800_000: '1 week',
+  300: '5 minutes',
+  1_800: '30 minutes',
+  3_600: '1 hour',
+  21_600: '6 hours',
+  86_400: '1 day',
+  259_200: '3 days',
+  604_800: '1 week',
 };
 
 const LIMIT = 80;
@@ -343,7 +343,7 @@ function AccountInfo({
   return (
     <div
       tabIndex="-1"
-      class={`account-container  ${uiState === 'loading' ? 'skeleton' : ''}`}
+      class={`account-container ${uiState === 'loading' ? 'skeleton' : ''}`}
       style={{
         '--header-color-1': headerCornerColors[0],
         '--header-color-2': headerCornerColors[1],
@@ -453,12 +453,15 @@ function AccountInfo({
                   e.target.classList.add('loaded');
                   try {
                     // Get color from four corners of image
-                    const canvas = document.createElement('canvas');
+                    const canvas = window.OffscreenCanvas
+                      ? new OffscreenCanvas(1, 1)
+                      : document.createElement('canvas');
                     const ctx = canvas.getContext('2d', {
                       willReadFrequently: true,
                     });
                     canvas.width = e.target.width;
                     canvas.height = e.target.height;
+                    ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(e.target, 0, 0);
                     // const colors = [
                     //   ctx.getImageData(0, 0, 1, 1).data,
@@ -604,6 +607,10 @@ function AccountInfo({
                         states.showGenericAccounts = {
                           heading: 'Followers',
                           fetchAccounts: fetchFollowers,
+                          instance,
+                          excludeRelationshipAttrs: isSelf
+                            ? ['followedBy']
+                            : [],
                         };
                       }, 0);
                     }}
@@ -637,6 +644,8 @@ function AccountInfo({
                         states.showGenericAccounts = {
                           heading: 'Following',
                           fetchAccounts: fetchFollowing,
+                          instance,
+                          excludeRelationshipAttrs: isSelf ? ['following'] : [],
                         };
                       }, 0);
                     }}
@@ -911,13 +920,14 @@ function RelatedActions({
   const [showTranslatedBio, setShowTranslatedBio] = useState(false);
   const [showAddRemoveLists, setShowAddRemoveLists] = useState(false);
   const [showPrivateNoteModal, setShowPrivateNoteModal] = useState(false);
+  const [lists, setLists] = useState([]);
 
   return (
     <>
       <div class="actions">
         <span>
           {followedBy ? (
-            <span class="tag">Following you</span>
+            <span class="tag">Follows you</span>
           ) : !!lastStatusAt ? (
             <small class="insignificant">
               Last post:{' '}
@@ -970,6 +980,22 @@ function RelatedActions({
                 <Icon icon="more" size="l" alt="More" />
               </button>
             }
+            onMenuChange={(e) => {
+              if (following && e.open) {
+                // Fetch lists that have this account
+                (async () => {
+                  try {
+                    const lists = await currentMasto.v1.accounts
+                      .$select(accountID.current)
+                      .lists.list();
+                    console.log('fetched account lists', lists);
+                    setLists(lists);
+                  } catch (e) {
+                    console.error(e);
+                  }
+                })();
+              }
+            }}
           >
             {currentAuthenticated && !isSelf && (
               <>
@@ -1011,12 +1037,46 @@ function RelatedActions({
                     }}
                   >
                     <Icon icon="list" />
-                    <span>Add/remove from Lists</span>
+                    {lists.length ? (
+                      <>
+                        <small class="menu-grow">
+                          Add/Remove from Lists
+                          <br />
+                          <span class="more-insignificant">
+                            {lists.map((list) => list.title).join(', ')}
+                          </span>
+                        </small>
+                        <small class="more-insignificant">{lists.length}</small>
+                      </>
+                    ) : (
+                      <span>Add/Remove from Lists</span>
+                    )}
                   </MenuItem>
                 )}
                 <MenuDivider />
               </>
             )}
+            <MenuItem
+              onClick={() => {
+                const handle = `@${currentInfo?.acct || acct}`;
+                try {
+                  navigator.clipboard.writeText(handle);
+                  showToast('Handle copied');
+                } catch (e) {
+                  console.error(e);
+                  showToast('Unable to copy handle');
+                }
+              }}
+            >
+              <Icon icon="copy" />
+              <small>
+                Copy handle
+                <br />
+                <span class="more-insignificant">
+                  @{currentInfo?.acct || acct}
+                </span>
+              </small>
+            </MenuItem>
             <MenuItem href={url} target="_blank">
               <Icon icon="external" />
               <small class="menu-double-lines">{niceAccountURL(url)}</small>
@@ -1088,6 +1148,7 @@ function RelatedActions({
                   </MenuItem>
                 ) : (
                   <SubMenu
+                    menuClassName="menu-blur"
                     openTrigger="clickOnly"
                     direction="bottom"
                     overflow="auto"
@@ -1202,10 +1263,38 @@ function RelatedActions({
                     </>
                   )}
                 </MenuConfirm>
-                {/* <MenuItem>
-                <Icon icon="flag" />
-                <span>Report @{username}…</span>
-              </MenuItem> */}
+                <MenuItem
+                  className="danger"
+                  onClick={() => {
+                    states.showReportModal = {
+                      account: currentInfo || info,
+                    };
+                  }}
+                >
+                  <Icon icon="flag" />
+                  <span>Report @{username}…</span>
+                </MenuItem>
+              </>
+            )}
+            {import.meta.env.DEV && currentAuthenticated && isSelf && (
+              <>
+                <MenuDivider />
+                <MenuItem
+                  onClick={async () => {
+                    const relationships =
+                      await currentMasto.v1.accounts.relationships.fetch({
+                        id: [accountID.current],
+                      });
+                    const { note } = relationships[0] || {};
+                    if (note) {
+                      alert(note);
+                      console.log(note);
+                    }
+                  }}
+                >
+                  <Icon icon="pencil" />
+                  <span>See note</span>
+                </MenuItem>
               </>
             )}
           </Menu2>
@@ -1288,7 +1377,6 @@ function RelatedActions({
       </div>
       {!!showTranslatedBio && (
         <Modal
-          class="light"
           onClose={() => {
             setShowTranslatedBio(false);
           }}
@@ -1302,7 +1390,6 @@ function RelatedActions({
       )}
       {!!showAddRemoveLists && (
         <Modal
-          class="light"
           onClose={() => {
             setShowAddRemoveLists(false);
           }}
@@ -1315,7 +1402,6 @@ function RelatedActions({
       )}
       {!!showPrivateNoteModal && (
         <Modal
-          class="light"
           onClose={() => {
             setShowPrivateNoteModal(false);
           }}
@@ -1507,7 +1593,6 @@ function AddRemoveListsSheet({ accountID, onClose }) {
       </main>
       {showListAddEditModal && (
         <Modal
-          class="light"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setShowListAddEditModal(false);

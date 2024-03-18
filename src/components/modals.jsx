@@ -10,10 +10,12 @@ import states from '../utils/states';
 import AccountSheet from './account-sheet';
 import Compose from './compose';
 import Drafts from './drafts';
+import EmbedModal from './embed-modal';
 import GenericAccounts from './generic-accounts';
 import MediaAltModal from './media-alt-modal';
 import MediaModal from './media-modal';
 import Modal from './modal';
+import ReportModal from './report-modal';
 import ShortcutsSettings from './shortcuts-settings';
 
 subscribe(states, (changes) => {
@@ -33,7 +35,7 @@ export default function Modals() {
   return (
     <>
       {!!snapStates.showCompose && (
-        <Modal>
+        <Modal class="solid">
           <Compose
             replyToStatus={
               typeof snapStates.showCompose !== 'boolean'
@@ -107,7 +109,6 @@ export default function Modals() {
       )}
       {!!snapStates.showAccount && (
         <Modal
-          class="light"
           onClose={() => {
             states.showAccount = false;
           }}
@@ -158,7 +159,6 @@ export default function Modals() {
       )}
       {!!snapStates.showShortcutsSettings && (
         <Modal
-          class="light"
           onClose={() => {
             states.showShortcutsSettings = false;
           }}
@@ -170,19 +170,21 @@ export default function Modals() {
       )}
       {!!snapStates.showGenericAccounts && (
         <Modal
-          class="light"
           onClose={() => {
             states.showGenericAccounts = false;
           }}
         >
           <GenericAccounts
+            instance={snapStates.showGenericAccounts.instance}
+            excludeRelationshipAttrs={
+              snapStates.showGenericAccounts.excludeRelationshipAttrs
+            }
             onClose={() => (states.showGenericAccounts = false)}
           />
         </Modal>
       )}
       {!!snapStates.showMediaAlt && (
         <Modal
-          class="light"
           onClose={(e) => {
             states.showMediaAlt = false;
           }}
@@ -192,6 +194,39 @@ export default function Modals() {
             lang={snapStates.showMediaAlt?.lang}
             onClose={() => {
               states.showMediaAlt = false;
+            }}
+          />
+        </Modal>
+      )}
+      {!!snapStates.showEmbedModal && (
+        <Modal
+          class="solid"
+          onClose={() => {
+            states.showEmbedModal = false;
+          }}
+        >
+          <EmbedModal
+            html={snapStates.showEmbedModal.html}
+            url={snapStates.showEmbedModal.url}
+            width={snapStates.showEmbedModal.width}
+            height={snapStates.showEmbedModal.height}
+            onClose={() => {
+              states.showEmbedModal = false;
+            }}
+          />
+        </Modal>
+      )}
+      {!!snapStates.showReportModal && (
+        <Modal
+          onClose={() => {
+            states.showReportModal = false;
+          }}
+        >
+          <ReportModal
+            account={snapStates.showReportModal.account}
+            post={snapStates.showReportModal.post}
+            onClose={() => {
+              states.showReportModal = false;
             }}
           />
         </Modal>

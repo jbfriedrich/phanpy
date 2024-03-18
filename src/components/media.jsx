@@ -54,6 +54,7 @@ const AltBadge = (props) => {
 };
 
 const MEDIA_CAPTION_LIMIT = 140;
+const MEDIA_CAPTION_LIMIT_LONGER = 280;
 export const isMediaCaptionLong = mem((caption) =>
   caption?.length
     ? caption.length > MEDIA_CAPTION_LIMIT ||
@@ -69,6 +70,7 @@ function Media({
   showOriginal,
   autoAnimate,
   showCaption,
+  allowLongerCaption,
   altIndex,
   onClick = () => {},
 }) {
@@ -96,7 +98,7 @@ function Media({
 
   const videoRef = useRef();
 
-  let focalBackgroundPosition;
+  let focalPosition;
   if (focus) {
     // Convert focal point to CSS background position
     // Formula from jquery-focuspoint
@@ -105,7 +107,7 @@ function Media({
     // x = 1, y = -1 => 100% 100%
     const x = ((focus.x + 1) / 2) * 100;
     const y = ((1 - focus.y) / 2) * 100;
-    focalBackgroundPosition = `${x.toFixed(0)}% ${y.toFixed(0)}%`;
+    focalPosition = `${x.toFixed(0)}% ${y.toFixed(0)}%`;
   }
 
   const mediaRef = useRef();
@@ -151,11 +153,18 @@ function Media({
     [to],
   );
 
+  const remoteMediaURLObj = remoteMediaURL ? new URL(remoteMediaURL) : null;
   const isVideoMaybe =
     type === 'unknown' &&
-    /\.(mp4|m4a|m4p|m4b|m4r|m4v|mov|webm)$/i.test(remoteMediaURL);
+    remoteMediaURLObj &&
+    /\.(mp4|m4r|m4v|mov|webm)$/i.test(remoteMediaURLObj.pathname);
+  const isAudioMaybe =
+    type === 'unknown' &&
+    remoteMediaURLObj &&
+    /\.(mp3|ogg|wav|m4a|m4p|m4b)$/i.test(remoteMediaURLObj.pathname);
   const isImage =
-    type === 'image' || (type === 'unknown' && previewUrl && !isVideoMaybe);
+    type === 'image' ||
+    (type === 'unknown' && previewUrl && !isVideoMaybe && !isAudioMaybe);
 
   const parentRef = useRef();
   const [imageSmallerThanParent, setImageSmallerThanParent] = useState(false);
@@ -191,8 +200,15 @@ function Media({
         };
 
   const longDesc = isMediaCaptionLong(description);
-  const showInlineDesc =
+  let showInlineDesc =
     !!showCaption && !showOriginal && !!description && !longDesc;
+  if (
+    allowLongerCaption &&
+    !showInlineDesc &&
+    description?.length <= MEDIA_CAPTION_LIMIT_LONGER
+  ) {
+    showInlineDesc = true;
+  }
   const Figure = !showInlineDesc
     ? Fragment
     : (props) => {
@@ -274,7 +290,7 @@ function Media({
                 }}
                 onError={(e) => {
                   const { src } = e.target;
-                  if (src === mediaURL) {
+                  if (src === mediaURL && mediaURL !== remoteMediaURL) {
                     e.target.src = remoteMediaURL;
                   }
                 }}
@@ -290,10 +306,11 @@ function Media({
                 data-orientation={orientation}
                 loading="lazy"
                 style={{
-                  backgroundColor:
-                    rgbAverageColor && `rgb(${rgbAverageColor.join(',')})`,
-                  backgroundPosition: focalBackgroundPosition || 'center',
+                  // backgroundColor:
+                  //   rgbAverageColor && `rgb(${rgbAverageColor.join(',')})`,
+                  // backgroundPosition: focalBackgroundPosition || 'center',
                   // Duration based on width or height in pixels
+                  objectPosition: focalPosition || 'center',
                   // 100px per second (rough estimate)
                   // Clamp between 5s and 120s
                   '--anim-duration': `${Math.min(
@@ -302,12 +319,12 @@ function Media({
                   )}s`,
                 }}
                 onLoad={(e) => {
-                  e.target.closest('.media-image').style.backgroundImage = '';
+                  // e.target.closest('.media-image').style.backgroundImage = '';
                   e.target.dataset.loaded = true;
                 }}
                 onError={(e) => {
                   const { src } = e.target;
-                  if (src === mediaURL) {
+                  if (src === mediaURL && mediaURL !== remoteMediaURL) {
                     e.target.src = remoteMediaURL;
                   }
                 }}
@@ -357,7 +374,7 @@ function Media({
         <Parent
           class={`media ${className} media-${isGIF ? 'gif' : 'video'} ${
             autoGIFAnimate ? 'media-contain' : ''
-          }`}
+          } ${hoverAnimate ? 'media-hover-animate' : ''}`}
           data-orientation={orientation}
           data-formatted-duration={
             !showOriginal ? formattedDuration : undefined
@@ -475,7 +492,7 @@ function Media({
         </Parent>
       </Figure>
     );
-  } else if (type === 'audio') {
+  } else if (type === 'audio' || isAudioMaybe) {
     const formattedDuration = formatDuration(original.duration);
     return (
       <Figure>
@@ -498,6 +515,12 @@ function Media({
               height={height}
               data-orientation={orientation}
               loading="lazy"
+              onError={(e) => {
+                try {
+                  // Remove self if broken
+                  e.target?.remove?.();
+                } catch (e) {}
+              }}
             />
           ) : null}
           {!showOriginal && (
