@@ -13,6 +13,7 @@ import {
   useRef,
   useState,
 } from 'preact/hooks';
+import punycode from 'punycode';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useSearchParams } from 'react-router-dom';
 import { uid } from 'uid/single';
@@ -39,7 +40,7 @@ import showToast from '../utils/show-toast';
 import states, { statusKey } from '../utils/states';
 import statusPeek from '../utils/status-peek';
 import store from '../utils/store';
-import { getCurrentAccountNS } from '../utils/store-utils';
+import { getCurrentAccountID, getCurrentAccountNS } from '../utils/store-utils';
 import { assignFollowedTags } from '../utils/timeline-utils';
 import useTitle from '../utils/useTitle';
 
@@ -111,7 +112,7 @@ function Catchup() {
   const [showTopLinks, setShowTopLinks] = useState(false);
 
   const currentAccount = useMemo(() => {
-    return store.session.get('currentAccount');
+    return getCurrentAccountID();
   }, []);
   const isSelf = (accountID) => accountID === currentAccount;
 
@@ -191,6 +192,7 @@ function Catchup() {
 
   const [posts, setPosts] = useState([]);
   const catchupRangeRef = useRef();
+  const catchupLastRef = useRef();
   const NS = useMemo(() => getCurrentAccountNS(), []);
   const handleCatchupClick = useCallback(async ({ duration } = {}) => {
     const now = Date.now();
@@ -925,7 +927,15 @@ function Catchup() {
                   type="button"
                   onClick={() => {
                     if (range < RANGES[RANGES.length - 1].value) {
-                      const duration = range * 60 * 60 * 1000;
+                      let duration;
+                      if (
+                        range === RANGES[RANGES.length - 1].value &&
+                        catchupLastRef.current?.checked
+                      ) {
+                        duration = Date.now() - lastCatchupEndAt;
+                      } else {
+                        duration = range * 60 * 60 * 1000;
+                      }
                       handleCatchupClick({ duration });
                     } else {
                       handleCatchupClick();
@@ -935,11 +945,25 @@ function Catchup() {
                   Catch up
                 </button>
               </div>
-              {lastCatchupRange && range > lastCatchupRange && (
+              {lastCatchupRange && range > lastCatchupRange ? (
                 <p class="catchup-info">
                   <Icon icon="info" /> Overlaps with your last catch-up
                 </p>
-              )}
+              ) : range === RANGES[RANGES.length - 1].value &&
+                lastCatchupEndAt ? (
+                <p class="catchup-info">
+                  <label>
+                    <input
+                      type="checkbox"
+                      switch
+                      checked
+                      ref={catchupLastRef}
+                    />{' '}
+                    Until the last catch-up (
+                    {dtf.format(new Date(lastCatchupEndAt))})
+                  </label>
+                </p>
+              ) : null}
               <p class="insignificant">
                 <small>
                   Note: your instance might only show a maximum of 800 posts in
@@ -1076,9 +1100,11 @@ function Catchup() {
                         height,
                         publishedAt,
                       } = card;
-                      const domain = new URL(url).hostname
-                        .replace(/^www\./, '')
-                        .replace(/\/$/, '');
+                      const domain = punycode.toUnicode(
+                        new URL(url).hostname
+                          .replace(/^www\./, '')
+                          .replace(/\/$/, ''),
+                      );
                       let accentColor;
                       if (blurhash) {
                         const averageColor = getBlurHashAverageColor(blurhash);

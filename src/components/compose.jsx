@@ -3,13 +3,23 @@ import './compose.css';
 import '@github/text-expander-element';
 import { MenuItem } from '@szhsin/react-menu';
 import { deepEqual } from 'fast-equals';
+import Fuse from 'fuse.js';
+import { memo } from 'preact/compat';
 import { forwardRef } from 'preact/compat';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
 import stringLength from 'string-length';
 import { uid } from 'uid/single';
 import { useDebouncedCallback, useThrottledCallback } from 'use-debounce';
 import { useSnapshot } from 'valtio';
+
+import poweredByGiphyURL from '../assets/powered-by-giphy.svg';
 
 import Menu2 from '../components/menu2';
 import supportedLanguages from '../data/status-supported-languages';
@@ -19,6 +29,7 @@ import db from '../utils/db';
 import emojifyText from '../utils/emojify-text';
 import localeMatch from '../utils/locale-match';
 import openCompose from '../utils/open-compose';
+import pmem from '../utils/pmem';
 import shortenNumber from '../utils/shorten-number';
 import showToast from '../utils/show-toast';
 import states, { saveStatus } from '../utils/states';
@@ -41,7 +52,10 @@ import Loader from './loader';
 import Modal from './modal';
 import Status from './status';
 
-const { PHANPY_IMG_ALT_API_URL: IMG_ALT_API_URL } = import.meta.env;
+const {
+  PHANPY_IMG_ALT_API_URL: IMG_ALT_API_URL,
+  PHANPY_GIPHY_API_KEY: GIPHY_API_KEY,
+} = import.meta.env;
 
 const supportedLanguagesMap = supportedLanguages.reduce((acc, l) => {
   const [code, common, native] = l;
@@ -119,14 +133,14 @@ const MENTION_RE = new RegExp(
 
 // AI-generated, all other regexes are too complicated
 const HASHTAG_RE = new RegExp(
-  `(^|[^=\\/\\w])(#[a-z0-9_]+([a-z0-9_.-]+[a-z0-9_]+)?)(?![\\/\\w])`,
+  `(^|[^=\\/\\w])(#[a-z0-9_]+([a-z0-9_.]+[a-z0-9_]+)?)(?![\\/\\w])`,
   'ig',
 );
 
 // https://github.com/mastodon/mastodon/blob/23e32a4b3031d1da8b911e0145d61b4dd47c4f96/app/models/custom_emoji.rb#L31
 const SHORTCODE_RE_FRAGMENT = '[a-zA-Z0-9_]{2,}';
 const SCAN_RE = new RegExp(
-  `([^A-Za-z0-9_:\\n]|^)(:${SHORTCODE_RE_FRAGMENT}:)(?=[^A-Za-z0-9_:]|$)`,
+  `(^|[^=\\/\\w])(:${SHORTCODE_RE_FRAGMENT}:)(?=[^A-Za-z0-9_:]|$)`,
   'g',
 );
 
@@ -175,6 +189,8 @@ function highlightText(text, { maxCharacters = Infinity }) {
 }
 
 const rtf = new Intl.RelativeTimeFormat();
+
+const CUSTOM_EMOJIS_COUNT = 100;
 
 function Compose({
   onClose,
@@ -610,6 +626,7 @@ function Compose({
   }, [mediaAttachments]);
 
   const [showEmoji2Picker, setShowEmoji2Picker] = useState(false);
+  const [showGIFPicker, setShowGIFPicker] = useState(false);
 
   const [topSupportedLanguages, restSupportedLanguages] = useMemo(() => {
     const topLanguages = [];
@@ -982,7 +999,11 @@ function Compose({
                 } else {
                   try {
                     newStatus = await masto.v1.statuses.create(params, {
-                      idempotencyKey: UID.current,
+                      requestInit: {
+                        headers: {
+                          'Idempotency-Key': UID.current,
+                        },
+                      },
                     });
                   } catch (_) {
                     // If idempotency key fails, try again without it
@@ -1209,22 +1230,30 @@ function Compose({
                 />
                 <Icon icon="attachment" />
               </label>{' '}
-              <button
-                type="button"
-                class="toolbar-button"
-                disabled={
-                  uiState === 'loading' || !!poll || !!mediaAttachments.length
-                }
-                onClick={() => {
-                  setPoll({
-                    options: ['', ''],
-                    expiresIn: 24 * 60 * 60, // 1 day
-                    multiple: false,
-                  });
-                }}
-              >
-                <Icon icon="poll" alt="Add poll" />
-              </button>{' '}
+              {/* If maxOptions is not defined or defined and is greater than 1, show poll button */}
+              {maxOptions == null ||
+                (maxOptions > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      class="toolbar-button"
+                      disabled={
+                        uiState === 'loading' ||
+                        !!poll ||
+                        !!mediaAttachments.length
+                      }
+                      onClick={() => {
+                        setPoll({
+                          options: ['', ''],
+                          expiresIn: 24 * 60 * 60, // 1 day
+                          multiple: false,
+                        });
+                      }}
+                    >
+                      <Icon icon="poll" alt="Add poll" />
+                    </button>{' '}
+                  </>
+                ))}
               <button
                 type="button"
                 class="toolbar-button"
@@ -1235,6 +1264,18 @@ function Compose({
               >
                 <Icon icon="emoji2" />
               </button>
+              {!!states.settings.composerGIFPicker && (
+                <button
+                  type="button"
+                  class="toolbar-button gif-picker-button"
+                  disabled={uiState === 'loading'}
+                  onClick={() => {
+                    setShowGIFPicker(true);
+                  }}
+                >
+                  <span>GIF</span>
+                </button>
+              )}
             </span>
             <div class="spacer" />
             {uiState === 'loading' ? (
@@ -1319,6 +1360,64 @@ function Compose({
           />
         </Modal>
       )}
+      {showGIFPicker && (
+        <Modal
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowGIFPicker(false);
+            }
+          }}
+        >
+          <GIFPickerModal
+            onClose={() => setShowGIFPicker(false)}
+            onSelect={({ url, type, alt_text }) => {
+              console.log('GIF URL', url);
+              if (mediaAttachments.length >= maxMediaAttachments) {
+                alert(
+                  `You can only attach up to ${maxMediaAttachments} files.`,
+                );
+                return;
+              }
+              // Download the GIF and insert it as media attachment
+              (async () => {
+                let theToast;
+                try {
+                  theToast = showToast({
+                    text: 'Downloading GIF…',
+                    duration: -1,
+                  });
+                  const blob = await fetch(url, {
+                    referrerPolicy: 'no-referrer',
+                  }).then((res) => res.blob());
+                  const file = new File(
+                    [blob],
+                    type === 'video/mp4' ? 'video.mp4' : 'image.gif',
+                    {
+                      type,
+                    },
+                  );
+                  const newMediaAttachments = [
+                    ...mediaAttachments,
+                    {
+                      file,
+                      type,
+                      size: file.size,
+                      id: null,
+                      description: alt_text || '',
+                    },
+                  ];
+                  setMediaAttachments(newMediaAttachments);
+                  theToast?.hideToast?.();
+                } catch (err) {
+                  console.error(err);
+                  theToast?.hideToast?.();
+                  showToast('Failed to download GIF');
+                }
+              })();
+            }}
+          />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1335,25 +1434,40 @@ function autoResizeTextarea(textarea) {
   }
 }
 
+async function _getCustomEmojis(instance, masto) {
+  const emojis = await masto.v1.customEmojis.list();
+  const visibleEmojis = emojis.filter((e) => e.visibleInPicker);
+  const searcher = new Fuse(visibleEmojis, {
+    keys: ['shortcode'],
+    findAllMatches: true,
+  });
+  return [visibleEmojis, searcher];
+}
+const getCustomEmojis = pmem(_getCustomEmojis, {
+  // Limit by time to reduce memory usage
+  // Cached by instance
+  matchesArg: (cacheKeyArg, keyArg) => cacheKeyArg.instance === keyArg.instance,
+  maxAge: 30 * 60 * 1000, // 30 minutes
+});
+
 const Textarea = forwardRef((props, ref) => {
-  const { masto } = api();
+  const { masto, instance } = api();
   const [text, setText] = useState(ref.current?.value || '');
   const { maxCharacters, performSearch = () => {}, ...textareaProps } = props;
   // const snapStates = useSnapshot(states);
   // const charCount = snapStates.composerCharacterCount;
 
-  const customEmojis = useRef();
+  // const customEmojis = useRef();
+  const searcherRef = useRef();
   useEffect(() => {
-    (async () => {
-      try {
-        const emojis = await masto.v1.customEmojis.list();
-        console.log({ emojis });
-        customEmojis.current = emojis;
-      } catch (e) {
-        // silent fail
+    getCustomEmojis(instance, masto)
+      .then((r) => {
+        const [emojis, searcher] = r;
+        searcherRef.current = searcher;
+      })
+      .catch((e) => {
         console.error(e);
-      }
-    })();
+      });
   }, []);
 
   const textExpanderRef = useRef();
@@ -1379,23 +1493,26 @@ const Textarea = forwardRef((props, ref) => {
           // const emojis = customEmojis.current.filter((emoji) =>
           //   emoji.shortcode.startsWith(text),
           // );
-          const emojis = filterShortcodes(customEmojis.current, text);
+          // const emojis = filterShortcodes(customEmojis.current, text);
+          const results = searcherRef.current?.search(text, {
+            limit: 5,
+          });
           let html = '';
-          emojis.forEach((emoji) => {
+          results.forEach(({ item: emoji }) => {
             const { shortcode, url } = emoji;
             html += `
                 <li role="option" data-value="${encodeHTML(shortcode)}">
                 <img src="${encodeHTML(
                   url,
                 )}" width="16" height="16" alt="" loading="lazy" /> 
-                :${encodeHTML(shortcode)}:
+                ${encodeHTML(shortcode)}
               </li>`;
           });
           // console.log({ emojis, html });
           menu.innerHTML = html;
           provide(
             Promise.resolve({
-              matched: emojis.length > 0,
+              matched: results.length > 0,
               fragment: menu,
             }),
           );
@@ -1711,6 +1828,9 @@ function MediaAttachment({
     onDescriptionChange,
     250,
   );
+  useEffect(() => {
+    debouncedOnDescriptionChange(description);
+  }, [description, debouncedOnDescriptionChange]);
 
   const [showModal, setShowModal] = useState(false);
   const textareaRef = useRef(null);
@@ -1759,7 +1879,7 @@ function MediaAttachment({
           onInput={(e) => {
             const { value } = e.target;
             setDescription(value);
-            debouncedOnDescriptionChange(value);
+            // debouncedOnDescriptionChange(value);
           }}
         ></textarea>
       )}
@@ -2094,38 +2214,19 @@ function CustomEmojisModal({
 }) {
   const [uiState, setUIState] = useState('default');
   const customEmojisList = useRef([]);
-  const [customEmojis, setCustomEmojis] = useState({});
+  const [customEmojis, setCustomEmojis] = useState([]);
   const recentlyUsedCustomEmojis = useMemo(
     () => store.account.get('recentlyUsedCustomEmojis') || [],
   );
+  const searcherRef = useRef();
   useEffect(() => {
     setUIState('loading');
     (async () => {
       try {
-        const emojis = await masto.v1.customEmojis.list();
-        // Group emojis by category
-        const emojisCat = {
-          '--recent--': recentlyUsedCustomEmojis.filter((emoji) =>
-            emojis.find((e) => e.shortcode === emoji.shortcode),
-          ),
-        };
-        const othersCat = [];
-        emojis.forEach((emoji) => {
-          if (!emoji.visibleInPicker) return;
-          customEmojisList.current?.push?.(emoji);
-          if (!emoji.category) {
-            othersCat.push(emoji);
-            return;
-          }
-          if (!emojisCat[emoji.category]) {
-            emojisCat[emoji.category] = [];
-          }
-          emojisCat[emoji.category].push(emoji);
-        });
-        if (othersCat.length) {
-          emojisCat['--others--'] = othersCat;
-        }
-        setCustomEmojis(emojisCat);
+        const [emojis, searcher] = await getCustomEmojis(instance, masto);
+        console.log('emojis', emojis);
+        searcherRef.current = searcher;
+        setCustomEmojis(emojis);
         setUIState('default');
       } catch (e) {
         setUIState('error');
@@ -2133,6 +2234,83 @@ function CustomEmojisModal({
       }
     })();
   }, []);
+
+  const customEmojisCatList = useMemo(() => {
+    // Group emojis by category
+    const emojisCat = {
+      '--recent--': recentlyUsedCustomEmojis.filter((emoji) =>
+        customEmojis.find((e) => e.shortcode === emoji.shortcode),
+      ),
+    };
+    const othersCat = [];
+    customEmojis.forEach((emoji) => {
+      customEmojisList.current?.push?.(emoji);
+      if (!emoji.category) {
+        othersCat.push(emoji);
+        return;
+      }
+      if (!emojisCat[emoji.category]) {
+        emojisCat[emoji.category] = [];
+      }
+      emojisCat[emoji.category].push(emoji);
+    });
+    if (othersCat.length) {
+      emojisCat['--others--'] = othersCat;
+    }
+    return emojisCat;
+  }, [customEmojis]);
+
+  const scrollableRef = useRef();
+  const [matches, setMatches] = useState(null);
+  const onFind = useCallback(
+    (e) => {
+      const { value } = e.target;
+      if (value) {
+        const results = searcherRef.current?.search(value, {
+          limit: CUSTOM_EMOJIS_COUNT,
+        });
+        setMatches(results.map((r) => r.item));
+        scrollableRef.current?.scrollTo?.(0, 0);
+      } else {
+        setMatches(null);
+      }
+    },
+    [customEmojis],
+  );
+
+  const onSelectEmoji = useCallback(
+    (emoji) => {
+      onSelect?.(emoji);
+      onClose?.();
+
+      queueMicrotask(() => {
+        let recentlyUsedCustomEmojis =
+          store.account.get('recentlyUsedCustomEmojis') || [];
+        const recentlyUsedEmojiIndex = recentlyUsedCustomEmojis.findIndex(
+          (e) => e.shortcode === emoji.shortcode,
+        );
+        if (recentlyUsedEmojiIndex !== -1) {
+          // Move emoji to index 0
+          recentlyUsedCustomEmojis.splice(recentlyUsedEmojiIndex, 1);
+          recentlyUsedCustomEmojis.unshift(emoji);
+        } else {
+          recentlyUsedCustomEmojis.unshift(emoji);
+          // Remove unavailable ones
+          recentlyUsedCustomEmojis = recentlyUsedCustomEmojis.filter((e) =>
+            customEmojisList.current?.find?.(
+              (emoji) => emoji.shortcode === e.shortcode,
+            ),
+          );
+          // Limit to 10
+          recentlyUsedCustomEmojis = recentlyUsedCustomEmojis.slice(0, 10);
+        }
+
+        // Store back
+        store.account.set('recentlyUsedCustomEmojis', recentlyUsedCustomEmojis);
+      });
+    },
+    [onSelect],
+  );
 
   return (
     <div id="custom-emojis-sheet" class="sheet">
@@ -2142,102 +2320,388 @@ function CustomEmojisModal({
         </button>
       )}
       <header>
-        <b>Custom emojis</b>{' '}
-        {uiState === 'loading' ? (
-          <Loader />
-        ) : (
-          <small class="insignificant"> • {instance}</small>
-        )}
-      </header>
-      <main>
-        <div class="custom-emojis-list">
-          {uiState === 'error' && (
-            <div class="ui-state">
-              <p>Error loading custom emojis</p>
-            </div>
+        <div>
+          <b>Custom emojis</b>{' '}
+          {uiState === 'loading' ? (
+            <Loader />
+          ) : (
+            <small class="insignificant"> • {instance}</small>
           )}
-          {uiState === 'default' &&
-            Object.entries(customEmojis).map(
-              ([category, emojis]) =>
-                !!emojis?.length && (
-                  <>
-                    <div class="section-header">
-                      {{
-                        '--recent--': 'Recently used',
-                        '--others--': 'Others',
-                      }[category] || category}
-                    </div>
-                    <section>
-                      {emojis.map((emoji) => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          class="plain4"
-                          onClick={() => {
-                            onClose();
-                            requestAnimationFrame(() => {
-                              onSelect(`:${emoji.shortcode}:`);
-                            });
-                            let recentlyUsedCustomEmojis =
-                              store.account.get('recentlyUsedCustomEmojis') ||
-                              [];
-                            const recentlyUsedEmojiIndex =
-                              recentlyUsedCustomEmojis.findIndex(
-                                (e) => e.shortcode === emoji.shortcode,
-                              );
-                            if (recentlyUsedEmojiIndex !== -1) {
-                              // Move emoji to index 0
-                              recentlyUsedCustomEmojis.splice(
-                                recentlyUsedEmojiIndex,
-                                1,
-                              );
-                              recentlyUsedCustomEmojis.unshift(emoji);
-                            } else {
-                              recentlyUsedCustomEmojis.unshift(emoji);
-                              // Remove unavailable ones
-                              recentlyUsedCustomEmojis =
-                                recentlyUsedCustomEmojis.filter((e) =>
-                                  customEmojisList.current?.find?.(
-                                    (emoji) => emoji.shortcode === e.shortcode,
-                                  ),
-                                );
-                              // Limit to 10
-                              recentlyUsedCustomEmojis =
-                                recentlyUsedCustomEmojis.slice(0, 10);
-                            }
-
-                            // Store back
-                            store.account.set(
-                              'recentlyUsedCustomEmojis',
-                              recentlyUsedCustomEmojis,
-                            );
-                          }}
-                          title={`:${emoji.shortcode}:`}
-                        >
-                          <picture>
-                            {!!emoji.staticUrl && (
-                              <source
-                                srcset={emoji.staticUrl}
-                                media="(prefers-reduced-motion: reduce)"
-                              />
-                            )}
-                            <img
-                              class="shortcode-emoji"
-                              src={emoji.url || emoji.staticUrl}
-                              alt={emoji.shortcode}
-                              width="16"
-                              height="16"
-                              loading="lazy"
-                              decoding="async"
-                            />
-                          </picture>
-                        </button>
-                      ))}
-                    </section>
-                  </>
-                ),
-            )}
         </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const emoji = matches[0];
+            if (emoji) {
+              onSelectEmoji(`:${emoji.shortcode}:`);
+            }
+          }}
+        >
+          <input
+            type="search"
+            placeholder="Search emoji"
+            onInput={onFind}
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellCheck="false"
+            dir="auto"
+          />
+        </form>
+      </header>
+      <main ref={scrollableRef}>
+        {matches !== null ? (
+          <ul class="custom-emojis-matches custom-emojis-list">
+            {matches.map((emoji) => (
+              <li key={emoji.shortcode} class="custom-emojis-match">
+                <CustomEmojiButton
+                  emoji={emoji}
+                  onClick={() => {
+                    onSelectEmoji(`:${emoji.shortcode}:`);
+                  }}
+                  showCode
+                />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div class="custom-emojis-list">
+            {uiState === 'error' && (
+              <div class="ui-state">
+                <p>Error loading custom emojis</p>
+              </div>
+            )}
+            {uiState === 'default' &&
+              Object.entries(customEmojisCatList).map(
+                ([category, emojis]) =>
+                  !!emojis?.length && (
+                    <>
+                      <div class="section-header">
+                        {{
+                          '--recent--': 'Recently used',
+                          '--others--': 'Others',
+                        }[category] || category}
+                      </div>
+                      <CustomEmojisList
+                        emojis={emojis}
+                        onSelect={onSelectEmoji}
+                      />
+                    </>
+                  ),
+              )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+const CustomEmojisList = memo(({ emojis, onSelect }) => {
+  const [max, setMax] = useState(CUSTOM_EMOJIS_COUNT);
+  const showMore = emojis.length > max;
+  return (
+    <section>
+      {emojis.slice(0, max).map((emoji) => (
+        <CustomEmojiButton
+          key={emoji.shortcode}
+          emoji={emoji}
+          onClick={() => {
+            onSelect(`:${emoji.shortcode}:`);
+          }}
+        />
+      ))}
+      {showMore && (
+        <button
+          type="button"
+          class="plain small"
+          onClick={() => setMax(max + CUSTOM_EMOJIS_COUNT)}
+        >
+          {(emojis.length - max).toLocaleString()} more…
+        </button>
+      )}
+    </section>
+  );
+});
+
+const CustomEmojiButton = memo(({ emoji, onClick, showCode }) => {
+  const addEdges = (e) => {
+    // Add edge-left or edge-right class based on self position relative to scrollable parent
+    // If near left edge, add edge-left, if near right edge, add edge-right
+    const buffer = 88;
+    const parent = e.currentTarget.closest('main');
+    if (parent) {
+      const rect = parent.getBoundingClientRect();
+      const selfRect = e.currentTarget.getBoundingClientRect();
+      const targetClassList = e.currentTarget.classList;
+      if (selfRect.left < rect.left + buffer) {
+        targetClassList.add('edge-left');
+        targetClassList.remove('edge-right');
+      } else if (selfRect.right > rect.right - buffer) {
+        targetClassList.add('edge-right');
+        targetClassList.remove('edge-left');
+      } else {
+        targetClassList.remove('edge-left', 'edge-right');
+      }
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className="plain4"
+      onClick={onClick}
+      data-title={showCode ? undefined : emoji.shortcode}
+      onPointerEnter={addEdges}
+      onFocus={addEdges}
+    >
+      <picture>
+        {!!emoji.staticUrl && (
+          <source
+            srcSet={emoji.staticUrl}
+            media="(prefers-reduced-motion: reduce)"
+          />
+        )}
+        <img
+          className="shortcode-emoji"
+          src={emoji.url || emoji.staticUrl}
+          alt={emoji.shortcode}
+          width="24"
+          height="24"
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+      {showCode && (
+        <>
+          {' '}
+          <code>{emoji.shortcode}</code>
+        </>
+      )}
+    </button>
+  );
+});
+
+const GIFS_PER_PAGE = 20;
+function GIFPickerModal({ onClose = () => {}, onSelect = () => {} }) {
+  const [uiState, setUIState] = useState('default');
+  const [results, setResults] = useState([]);
+  const formRef = useRef(null);
+  const qRef = useRef(null);
+  const currentOffset = useRef(0);
+  const scrollableRef = useRef(null);
+
+  function fetchGIFs({ offset }) {
+    console.log('fetchGIFs', { offset });
+    if (!qRef.current?.value) return;
+    setUIState('loading');
+    scrollableRef.current?.scrollTo?.({
+      top: 0,
+      left: 0,
+      behavior: 'smooth',
+    });
+    (async () => {
+      try {
+        const query = {
+          api_key: GIPHY_API_KEY,
+          q: qRef.current.value,
+          rating: 'g',
+          limit: GIFS_PER_PAGE,
+          bundle: 'messaging_non_clips',
+          offset,
+        };
+        const response = await fetch(
+          'https://api.giphy.com/v1/gifs/search?' + new URLSearchParams(query),
+          {
+            referrerPolicy: 'no-referrer',
+          },
+        ).then((r) => r.json());
+        currentOffset.current = response.pagination?.offset || 0;
+        setResults(response);
+        setUIState('results');
+      } catch (e) {
+        setUIState('error');
+        console.error(e);
+      }
+    })();
+  }
+
+  useEffect(() => {
+    qRef.current?.focus();
+  }, []);
+
+  const debouncedOnInput = useDebouncedCallback(() => {
+    fetchGIFs({ offset: 0 });
+  }, 1000);
+
+  return (
+    <div id="gif-picker-sheet" class="sheet">
+      {!!onClose && (
+        <button type="button" class="sheet-close" onClick={onClose}>
+          <Icon icon="x" />
+        </button>
+      )}
+      <header>
+        <form
+          ref={formRef}
+          onSubmit={(e) => {
+            e.preventDefault();
+            fetchGIFs({ offset: 0 });
+          }}
+        >
+          <input
+            ref={qRef}
+            type="search"
+            name="q"
+            placeholder="Search GIFs"
+            required
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellCheck="false"
+            dir="auto"
+            onInput={debouncedOnInput}
+          />
+          <input
+            type="image"
+            class="powered-button"
+            src={poweredByGiphyURL}
+            width="86"
+            height="30"
+          />
+        </form>
+      </header>
+      <main ref={scrollableRef} class={uiState === 'loading' ? 'loading' : ''}>
+        {uiState === 'default' && (
+          <div class="ui-state">
+            <p class="insignificant">Type to search GIFs</p>
+          </div>
+        )}
+        {uiState === 'loading' && !results?.data?.length && (
+          <div class="ui-state">
+            <Loader abrupt />
+          </div>
+        )}
+        {results?.data?.length > 0 ? (
+          <>
+            <ul>
+              {results.data.map((gif) => {
+                const { id, images, title, alt_text } = gif;
+                const {
+                  fixed_height_small,
+                  fixed_height_downsampled,
+                  fixed_height,
+                  original,
+                } = images;
+                const theImage = fixed_height_small?.url
+                  ? fixed_height_small
+                  : fixed_height_downsampled?.url
+                  ? fixed_height_downsampled
+                  : fixed_height;
+                let { url, webp, width, height } = theImage;
+                if (+height > 100) {
+                  width = (width / height) * 100;
+                  height = 100;
+                }
+                const urlObj = new URL(url);
+                const strippedURL = urlObj.origin + urlObj.pathname;
+                let strippedWebP;
+                if (webp) {
+                  const webpObj = new URL(webp);
+                  strippedWebP = webpObj.origin + webpObj.pathname;
+                }
+                return (
+                  <li key={id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const { mp4, url } = original;
+                        const theURL = mp4 || url;
+                        const urlObj = new URL(theURL);
+                        const strippedURL = urlObj.origin + urlObj.pathname;
+                        onClose();
+                        onSelect({
+                          url: strippedURL,
+                          type: mp4 ? 'video/mp4' : 'image/gif',
+                          alt_text: alt_text || title,
+                        });
+                      }}
+                    >
+                      <figure
+                        style={{
+                          '--figure-width': width + 'px',
+                          // width: width + 'px'
+                        }}
+                      >
+                        <picture>
+                          {strippedWebP && (
+                            <source srcset={strippedWebP} type="image/webp" />
+                          )}
+                          <img
+                            src={strippedURL}
+                            width={width}
+                            height={height}
+                            loading="lazy"
+                            decoding="async"
+                            alt={alt_text}
+                            referrerpolicy="no-referrer"
+                            onLoad={(e) => {
+                              e.target.style.backgroundColor = 'transparent';
+                            }}
+                          />
+                        </picture>
+                        <figcaption>{alt_text || title}</figcaption>
+                      </figure>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <p class="pagination">
+              {results.pagination?.offset > 0 && (
+                <button
+                  type="button"
+                  class="light small"
+                  disabled={uiState === 'loading'}
+                  onClick={() => {
+                    fetchGIFs({
+                      offset: results.pagination?.offset - GIFS_PER_PAGE,
+                    });
+                  }}
+                >
+                  <Icon icon="chevron-left" />
+                  <span>Previous</span>
+                </button>
+              )}
+              <span />
+              {results.pagination?.offset + results.pagination?.count <
+                results.pagination?.total_count && (
+                <button
+                  type="button"
+                  class="light small"
+                  disabled={uiState === 'loading'}
+                  onClick={() => {
+                    fetchGIFs({
+                      offset: results.pagination?.offset + GIFS_PER_PAGE,
+                    });
+                  }}
+                >
+                  <span>Next</span> <Icon icon="chevron-right" />
+                </button>
+              )}
+            </p>
+          </>
+        ) : (
+          uiState === 'results' && (
+            <div class="ui-state">
+              <p>No results</p>
+            </div>
+          )
+        )}
+        {uiState === 'error' && (
+          <div class="ui-state">
+            <p>Error loading GIFs</p>
+          </div>
+        )}
       </main>
     </div>
   );
