@@ -1,11 +1,10 @@
 import './compose.css';
-
 import '@github/text-expander-element';
+
 import { MenuItem } from '@szhsin/react-menu';
 import { deepEqual } from 'fast-equals';
 import Fuse from 'fuse.js';
-import { memo } from 'preact/compat';
-import { forwardRef } from 'preact/compat';
+import { forwardRef, memo } from 'preact/compat';
 import {
   useCallback,
   useEffect,
@@ -28,6 +27,7 @@ import urlRegex from '../data/url-regex';
 import { api } from '../utils/api';
 import db from '../utils/db';
 import emojifyText from '../utils/emojify-text';
+import isRTL from '../utils/is-rtl';
 import localeMatch from '../utils/locale-match';
 import localeCode2Text from '../utils/localeCode2Text';
 import openCompose from '../utils/open-compose';
@@ -104,7 +104,8 @@ const observer = new IntersectionObserver((entries) => {
       const { left, width } = entry.boundingClientRect;
       const { innerWidth } = window;
       if (left + width > innerWidth) {
-        menu.style.left = innerWidth - width - windowMargin + 'px';
+        const insetInlineStart = isRTL() ? 'right' : 'left';
+        menu.style[insetInlineStart] = innerWidth - width - windowMargin + 'px';
       }
     }
   });
@@ -148,23 +149,22 @@ const SCAN_RE = new RegExp(
 );
 
 const segmenter = new Intl.Segmenter();
-function highlightText(text, { maxCharacters = Infinity }) {
-  // Accept text string, return formatted HTML string
-  // Escape all HTML special characters
-  let html = text
+function escapeHTML(text) {
+  return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
-
+}
+function highlightText(text, { maxCharacters = Infinity }) {
   // Exceeded characters limit
   const { composerCharacterCount } = states;
   if (composerCharacterCount > maxCharacters) {
     // Highlight exceeded characters
     let withinLimitHTML = '',
       exceedLimitHTML = '';
-    const htmlSegments = segmenter.segment(html);
+    const htmlSegments = segmenter.segment(text);
     for (const { segment, index } of htmlSegments) {
       if (index < maxCharacters) {
         withinLimitHTML += segment;
@@ -175,13 +175,13 @@ function highlightText(text, { maxCharacters = Infinity }) {
     if (exceedLimitHTML) {
       exceedLimitHTML =
         '<mark class="compose-highlight-exceeded">' +
-        exceedLimitHTML +
+        escapeHTML(exceedLimitHTML) +
         '</mark>';
     }
-    return withinLimitHTML + exceedLimitHTML;
+    return escapeHTML(withinLimitHTML) + exceedLimitHTML;
   }
 
-  return html
+  return escapeHTML(text)
     .replace(urlRegexObj, '$2<mark class="compose-highlight-url">$3</mark>') // URLs
     .replace(MENTION_RE, '$1<mark class="compose-highlight-mention">$2</mark>') // Mentions
     .replace(HASHTAG_RE, '$1<mark class="compose-highlight-hashtag">$2</mark>') // Hashtags
@@ -1129,6 +1129,7 @@ function Compose({
                   setVisibility(e.target.value);
                 }}
                 disabled={uiState === 'loading' || !!editStatus}
+                dir="auto"
               >
                 <option value="public">
                   Public <Icon icon="earth" />
@@ -1385,6 +1386,7 @@ function Compose({
                   store.session.set('currentLanguage', value || DEFAULT_LANG);
                 }}
                 disabled={uiState === 'loading'}
+                dir="auto"
               >
                 {topSupportedLanguages.map(([code, common, native]) => (
                   <option value={code} key={code}>
@@ -1718,7 +1720,9 @@ const Textarea = forwardRef((props, ref) => {
                       </span>
                       <span>
                         <b>${displayNameWithEmoji || username}</b>
-                        <br>@${encodeHTML(acct)}
+                        <br><span class="bidi-isolate">@${encodeHTML(
+                          acct,
+                        )}</span>
                       </span>
                     </li>
                   `;
@@ -2317,10 +2321,8 @@ function MediaAttachment({
       </div>
       {showModal && (
         <Modal
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowModal(false);
-            }
+          onClose={() => {
+            setShowModal(false);
           }}
         >
           <div id="media-sheet" class="sheet sheet-max">

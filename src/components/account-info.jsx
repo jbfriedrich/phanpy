@@ -33,9 +33,9 @@ import Icon from './icon';
 import Link from './link';
 import ListAddEdit from './list-add-edit';
 import Loader from './loader';
-import Menu2 from './menu2';
 import MenuConfirm from './menu-confirm';
 import MenuLink from './menu-link';
+import Menu2 from './menu2';
 import Modal from './modal';
 import SubMenu2 from './submenu2';
 import TranslationBlock from './translation-block';
@@ -568,9 +568,11 @@ function AccountInfo({
                   </div>
                   <MenuItem
                     onClick={() => {
-                      const handle = `@${acct}`;
+                      const handleWithInstance = acct.includes('@')
+                        ? `@${acct}`
+                        : `@${acct}@${instance}`;
                       try {
-                        navigator.clipboard.writeText(handle);
+                        navigator.clipboard.writeText(handleWithInstance);
                         showToast('Handle copied');
                       } catch (e) {
                         console.error(e);
@@ -924,6 +926,8 @@ function RelatedActions({
   const [currentInfo, setCurrentInfo] = useState(null);
   const [isSelf, setIsSelf] = useState(false);
 
+  const acctWithInstance = acct.includes('@') ? acct : `${acct}@${instance}`;
+
   useEffect(() => {
     if (info) {
       const currentAccount = getCurrentAccountID();
@@ -1205,7 +1209,7 @@ function RelatedActions({
             )}
             <MenuItem
               onClick={() => {
-                const handle = `@${currentInfo?.acct || acct}`;
+                const handle = `@${currentInfo?.acct || acctWithInstance}`;
                 try {
                   navigator.clipboard.writeText(handle);
                   showToast('Handle copied');
@@ -1219,8 +1223,8 @@ function RelatedActions({
               <small>
                 Copy handle
                 <br />
-                <span class="more-insignificant">
-                  @{currentInfo?.acct || acct}
+                <span class="more-insignificant bidi-isolate">
+                  @{currentInfo?.acct || acctWithInstance}
                 </span>
               </small>
             </MenuItem>
@@ -1893,6 +1897,7 @@ function PrivateNoteSheet({
             ref={textareaRef}
             name="note"
             disabled={uiState === 'loading'}
+            dir="auto"
           >
             {initialNote}
           </textarea>
@@ -2015,6 +2020,7 @@ function EditProfileSheet({ onClose = () => {} }) {
                   defaultValue={displayName}
                   maxLength={30}
                   disabled={uiState === 'loading'}
+                  dir="auto"
                 />
               </label>
             </p>
@@ -2027,6 +2033,7 @@ function EditProfileSheet({ onClose = () => {} }) {
                   maxLength={500}
                   rows="5"
                   disabled={uiState === 'loading'}
+                  dir="auto"
                 />
               </label>
             </p>
@@ -2090,6 +2097,7 @@ function FieldsAttributesRow({ name, value, disabled, index: i }) {
           disabled={disabled}
           maxLength={255}
           required={hasValue}
+          dir="auto"
         />
       </td>
       <td>
@@ -2100,6 +2108,7 @@ function FieldsAttributesRow({ name, value, disabled, index: i }) {
           disabled={disabled}
           maxLength={255}
           onChange={(e) => setHasValue(!!e.currentTarget.value)}
+          dir="auto"
         />
       </td>
     </tr>

@@ -19,8 +19,7 @@ import { oklab2rgb, rgb2oklab } from '../utils/color-utils';
 import { filteredItems } from '../utils/filters';
 import pmem from '../utils/pmem';
 import shortenNumber from '../utils/shorten-number';
-import states from '../utils/states';
-import { saveStatus } from '../utils/states';
+import states, { saveStatus } from '../utils/states';
 import supports from '../utils/supports';
 import useTitle from '../utils/useTitle';
 
@@ -210,7 +209,7 @@ function Trending({ columnMode, ...props }) {
               const total = history.reduce((acc, cur) => acc + +cur.uses, 0);
               return (
                 <Link to={`/${instance}/t/${name}`} key={name}>
-                  <span>
+                  <span dir="auto">
                     <span class="more-insignificant">#</span>
                     {name}
                   </span>

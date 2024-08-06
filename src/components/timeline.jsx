@@ -13,6 +13,7 @@ import { useSnapshot } from 'valtio';
 
 import FilterContext from '../utils/filter-context';
 import { filteredItems, isFiltered } from '../utils/filters';
+import isRTL from '../utils/is-rtl';
 import states, { statusKey } from '../utils/states';
 import statusPeek from '../utils/status-peek';
 import { isMediaFirstInstance } from '../utils/store-utils';
@@ -388,6 +389,17 @@ function Timeline({
           dotRef.current = node;
         }}
         tabIndex="-1"
+        onClick={(e) => {
+          // If click on timeline item, unhide header
+          if (
+            headerRef.current &&
+            e.target.closest('.timeline-item, .timeline-item-alt')
+          ) {
+            setTimeout(() => {
+              headerRef.current.hidden = false;
+            }, 250);
+          }
+        }}
       >
         <div class="timeline-deck deck">
           <header
@@ -561,7 +573,7 @@ const TimelineItem = memo(
       : `/s/${actualStatusID}`;
 
     if (items) {
-      const fItems = filteredItems(items, filterContext);
+      let fItems = filteredItems(items, filterContext);
       let title = '';
       if (type === 'boosts') {
         title = `${fItems.length} Boosts`;
@@ -570,6 +582,7 @@ const TimelineItem = memo(
       }
       const isCarousel = type === 'boosts' || type === 'pinned';
       if (isCarousel) {
+        const filteredItemsIDs = new Set();
         // Here, we don't hide filtered posts, but we sort them last
         fItems.sort((a, b) => {
           // if (a._filtered && !b._filtered) {
@@ -580,6 +593,8 @@ const TimelineItem = memo(
           // }
           const aFiltered = isFiltered(a.filtered, filterContext);
           const bFiltered = isFiltered(b.filtered, filterContext);
+          if (aFiltered) filteredItemsIDs.add(a.id);
+          if (bFiltered) filteredItemsIDs.add(b.id);
           if (aFiltered && !bFiltered) {
             return 1;
           }
@@ -588,11 +603,69 @@ const TimelineItem = memo(
           }
           return 0;
         });
+
+        if (filteredItemsIDs.size >= 2) {
+          const GROUP_SIZE = 5;
+          // If 2 or more, group filtered items into one, limit to GROUP_SIZE in a group
+          const unfiltered = [];
+          const filtered = [];
+          fItems.forEach((item) => {
+            if (filteredItemsIDs.has(item.id)) {
+              filtered.push(item);
+            } else {
+              unfiltered.push(item);
+            }
+          });
+          const filteredItems = [];
+          for (let i = 0; i < filtered.length; i += GROUP_SIZE) {
+            filteredItems.push({
+              _grouped: true,
+              posts: filtered.slice(i, i + GROUP_SIZE),
+            });
+          }
+          fItems = unfiltered.concat(filteredItems);
+        }
+
         return (
           <li key={`timeline-${statusID}`} class="timeline-item-carousel">
             <StatusCarousel title={title} class={`${type}-carousel`}>
               {fItems.map((item) => {
-                const { id: statusID, reblog, _pinned } = item;
+                const { id: statusID, reblog, _pinned, _grouped } = item;
+                if (_grouped) {
+                  return (
+                    <li key={statusID} class="timeline-item-carousel-group">
+                      {item.posts.map((item) => {
+                        const { id: statusID, reblog, _pinned } = item;
+                        const actualStatusID = reblog?.id || statusID;
+                        const url = instance
+                          ? `/${instance}/s/${actualStatusID}`
+                          : `/s/${actualStatusID}`;
+                        if (_pinned) useItemID = false;
+                        return (
+                          <Link
+                            class="status-carousel-link timeline-item-alt"
+                            to={url}
+                          >
+                            {useItemID ? (
+                              <Status
+                                statusID={statusID}
+                                instance={instance}
+                                size="s"
+                              />
+                            ) : (
+                              <Status
+                                status={item}
+                                instance={instance}
+                                size="s"
+                              />
+                            )}
+                          </Link>
+                        );
+                      })}
+                    </li>
+                  );
+                }
+
                 const actualStatusID = reblog?.id || statusID;
                 const url = instance
                   ? `/${instance}/s/${actualStatusID}`
@@ -792,8 +865,11 @@ function StatusCarousel({ title, class: className, children }) {
             class="small plain2"
             // disabled={reachStart}
             onClick={() => {
+              const left =
+                Math.min(320, carouselRef.current?.offsetWidth) *
+                (isRTL() ? 1 : -1);
               carouselRef.current?.scrollBy({
-                left: -Math.min(320, carouselRef.current?.offsetWidth),
+                left,
                 behavior: 'smooth',
               });
             }}
@@ -806,8 +882,11 @@ function StatusCarousel({ title, class: className, children }) {
             class="small plain2"
             // disabled={reachEnd}
             onClick={() => {
+              const left =
+                Math.min(320, carouselRef.current?.offsetWidth) *
+                (isRTL() ? -1 : 1);
               carouselRef.current?.scrollBy({
-                left: Math.min(320, carouselRef.current?.offsetWidth),
+                left,
                 behavior: 'smooth',
               });
             }}

@@ -110,6 +110,17 @@
   --spring-timing-funtion: cubic-bezier(0.175, 0.885, 0.32, 1.275);
 
   --min-dimension: 88px;
+
+  --forward: right;
+  --backward: left;
+  --to-forward: to right;
+  --to-backward: to left;
+  &:dir(rtl) {
+    --forward: left;
+    --backward: right;
+    --to-forward: to left;
+    --to-backward: to right;
+  }
 }
 
 @media (min-resolution: 2dppx) {
@@ -378,9 +389,15 @@ textarea:disabled {
   width: 100%;
 }
 
-button.small {
+:is(button, .button).small {
   font-size: 90%;
   padding: 4px 8px;
+}
+
+.button.centered {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
 }
 
 select.plain {
@@ -434,6 +451,11 @@ kbd {
 }
 :has(:focus-visible) .hide-until-focus-visible {
   display: initial;
+}
+
+.bidi-isolate {
+  direction: initial;
+  unicode-bidi: isolate;
 }
 
 /* KEYFRAMES */
