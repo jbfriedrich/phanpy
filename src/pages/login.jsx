@@ -64,9 +64,9 @@ function Login() {
           });
 
         if (client_id && client_secret) {
-          store.session.set('clientID', client_id);
-          store.session.set('clientSecret', client_secret);
-          store.session.set('vapidKey', vapid_key);
+          store.sessionCookie.set('clientID', client_id);
+          store.sessionCookie.set('clientSecret', client_secret);
+          store.sessionCookie.set('vapidKey', vapid_key);
 
           location.href = await getAuthorizationURL({
             instanceURL,
@@ -194,7 +194,7 @@ function Login() {
         {uiState === 'error' && (
           <p class="error">
             <Trans>
-              Failed to log in. Please try again or another instance.
+              Failed to log in. Please try again or try another instance.
             </Trans>
           </p>
         )}

@@ -63,7 +63,6 @@ const MUTE_DURATIONS_LABELS = {
   259_200: i18nDuration(3, 'day'),
   604_800: i18nDuration(1, 'week'),
 };
-console.log({ MUTE_DURATIONS_LABELS });
 
 const LIMIT = 80;
 
@@ -1146,7 +1145,9 @@ function RelatedActions({
                 >
                   <Icon icon="at" />
                   <span>
-                    <Trans>Mention @{username}</Trans>
+                    <Trans>
+                      Mention <span class="bidi-isolate">@{username}</span>
+                    </Trans>
                   </span>
                 </MenuItem>
                 <MenuItem
@@ -1357,7 +1358,9 @@ function RelatedActions({
                   >
                     <Icon icon="unmute" />
                     <span>
-                      <Trans>Unmute @{username}</Trans>
+                      <Trans>
+                        Unmute <span class="bidi-isolate">@{username}</span>
+                      </Trans>
                     </span>
                   </MenuItem>
                 ) : (
@@ -1371,7 +1374,9 @@ function RelatedActions({
                       <>
                         <Icon icon="mute" />
                         <span class="menu-grow">
-                          <Trans>Mute @{username}…</Trans>
+                          <Trans>
+                            Mute <span class="bidi-isolate">@{username}</span>…
+                          </Trans>
                         </span>
                         <span
                           style={{
@@ -1434,7 +1439,10 @@ function RelatedActions({
                       <>
                         <Icon icon="user-x" />
                         <span>
-                          <Trans>Remove @{username} from followers?</Trans>
+                          <Trans>
+                            Remove <span class="bidi-isolate">@{username}</span>{' '}
+                            from followers?
+                          </Trans>
                         </span>
                       </>
                     }
@@ -1474,7 +1482,9 @@ function RelatedActions({
                     <>
                       <Icon icon="block" />
                       <span>
-                        <Trans>Block @{username}?</Trans>
+                        <Trans>
+                          Block <span class="bidi-isolate">@{username}</span>?
+                        </Trans>
                       </span>
                     </>
                   }
@@ -1521,14 +1531,18 @@ function RelatedActions({
                     <>
                       <Icon icon="unblock" />
                       <span>
-                        <Trans>Unblock @{username}</Trans>
+                        <Trans>
+                          Unblock <span class="bidi-isolate">@{username}</span>
+                        </Trans>
                       </span>
                     </>
                   ) : (
                     <>
                       <Icon icon="block" />
                       <span>
-                        <Trans>Block @{username}…</Trans>
+                        <Trans>
+                          Block <span class="bidi-isolate">@{username}</span>…
+                        </Trans>
                       </span>
                     </>
                   )}
@@ -1543,7 +1557,9 @@ function RelatedActions({
                 >
                   <Icon icon="flag" />
                   <span>
-                    <Trans>Report @{username}…</Trans>
+                    <Trans>
+                      Report <span class="bidi-isolate">@{username}</span>…
+                    </Trans>
                   </span>
                 </MenuItem>
               </>
@@ -1973,7 +1989,10 @@ function PrivateNoteSheet({
       <header>
         <b>
           <Trans>
-            Private note about @{account?.username || account?.acct}
+            Private note about{' '}
+            <span class="bidi-isolate">
+              @{account?.username || account?.acct}
+            </span>
           </Trans>
         </b>
       </header>
