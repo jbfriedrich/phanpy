@@ -11,7 +11,12 @@ import LangSelector from '../components/lang-selector';
 import Link from '../components/link';
 import Loader from '../components/loader';
 import instancesListURL from '../data/instances.json?url';
-import { getAuthorizationURL, registerApplication } from '../utils/auth';
+import {
+  getAuthorizationURL,
+  getPKCEAuthorizationURL,
+  registerApplication,
+} from '../utils/auth';
+import { supportsPKCE } from '../utils/oauth-pkce';
 import store from '../utils/store';
 import useTitle from '../utils/useTitle';
 
@@ -53,9 +58,32 @@ function Login() {
 
   const submitInstance = (instanceURL) => {
     if (!instanceURL) return;
-    store.local.set('instanceURL', instanceURL);
 
     (async () => {
+      // WEB_DOMAIN vs LOCAL_DOMAIN negotiation time
+      // https://docs.joinmastodon.org/admin/config/#web_domain
+      try {
+        const res = await fetch(`https://${instanceURL}/.well-known/host-meta`); // returns XML
+        const text = await res.text();
+        // Parse XML
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(text, 'text/xml');
+        // Get Link[template]
+        const link = xmlDoc.getElementsByTagName('Link')[0];
+        const template = link.getAttribute('template');
+        const url = URL.parse(template);
+        const { host } = url; // host includes the port
+        if (instanceURL !== host) {
+          console.log(`💫 ${instanceURL} -> ${host}`);
+          instanceURL = host;
+        }
+      } catch (e) {
+        // Silently fail
+        console.error(e);
+      }
+
+      store.local.set('instanceURL', instanceURL);
+
       setUIState('loading');
       try {
         const { client_id, client_secret, vapid_key } =
@@ -63,17 +91,36 @@ function Login() {
             instanceURL,
           });
 
-        if (client_id && client_secret) {
-          store.sessionCookie.set('clientID', client_id);
-          store.sessionCookie.set('clientSecret', client_secret);
-          store.sessionCookie.set('vapidKey', vapid_key);
+        const authPKCE = await supportsPKCE({ instanceURL });
+        console.log({ authPKCE });
+        if (authPKCE) {
+          if (client_id && client_secret) {
+            store.sessionCookie.set('clientID', client_id);
+            store.sessionCookie.set('clientSecret', client_secret);
+            store.sessionCookie.set('vapidKey', vapid_key);
 
-          location.href = await getAuthorizationURL({
-            instanceURL,
-            client_id,
-          });
+            const [url, verifier] = await getPKCEAuthorizationURL({
+              instanceURL,
+              client_id,
+            });
+            store.sessionCookie.set('codeVerifier', verifier);
+            location.href = url;
+          } else {
+            alert(t`Failed to register application`);
+          }
         } else {
-          alert('Failed to register application');
+          if (client_id && client_secret) {
+            store.sessionCookie.set('clientID', client_id);
+            store.sessionCookie.set('clientSecret', client_secret);
+            store.sessionCookie.set('vapidKey', vapid_key);
+
+            location.href = await getAuthorizationURL({
+              instanceURL,
+              client_id,
+            });
+          } else {
+            alert(t`Failed to register application`);
+          }
         }
         setUIState('default');
       } catch (e) {
@@ -158,7 +205,7 @@ function Login() {
             autocapitalize="off"
             autocomplete="off"
             spellCheck={false}
-            placeholder={`instance domain`}
+            placeholder={t`instance domain`}
             onInput={(e) => {
               setInstanceText(e.target.value);
             }}

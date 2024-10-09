@@ -1,4 +1,4 @@
-import { t, Trans } from '@lingui/macro';
+import { plural, t, Trans } from '@lingui/macro';
 import { memo } from 'preact/compat';
 import {
   useCallback,
@@ -15,6 +15,7 @@ import { useSnapshot } from 'valtio';
 import FilterContext from '../utils/filter-context';
 import { filteredItems, isFiltered } from '../utils/filters';
 import isRTL from '../utils/is-rtl';
+import showToast from '../utils/show-toast';
 import states, { statusKey } from '../utils/states';
 import statusPeek from '../utils/status-peek';
 import { isMediaFirstInstance } from '../utils/store-utils';
@@ -68,6 +69,7 @@ function Timeline({
   const scrollableRef = useRef();
 
   console.debug('RENDER Timeline', id, refresh);
+  __BENCHMARK.start(`timeline-${id}-load`);
 
   const mediaFirst = useMemo(() => isMediaFirstInstance(), []);
 
@@ -118,9 +120,13 @@ function Timeline({
             setShowMore(false);
           }
           setUIState('default');
+          __BENCHMARK.end(`timeline-${id}-load`);
         } catch (e) {
           console.error(e);
           setUIState('error');
+          if (firstLoad && !items.length && errorText) {
+            showToast(errorText);
+          }
         } finally {
           loadItems.cancel();
         }
@@ -384,10 +390,10 @@ function Timeline({
         }`}
         ref={(node) => {
           scrollableRef.current = node;
-          jRef.current = node;
-          kRef.current = node;
-          oRef.current = node;
-          dotRef.current = node;
+          jRef(node);
+          kRef(node);
+          oRef(node);
+          dotRef(node);
         }}
         tabIndex="-1"
         onClick={(e) => {
@@ -579,9 +585,12 @@ const TimelineItem = memo(
       let fItems = filteredItems(items, filterContext);
       let title = '';
       if (type === 'boosts') {
-        title = `${fItems.length} Boosts`;
+        title = plural(fItems.length, {
+          one: '# Boost',
+          other: '# Boosts',
+        });
       } else if (type === 'pinned') {
-        title = 'Pinned posts';
+        title = t`Pinned posts`;
       }
       const isCarousel = type === 'boosts' || type === 'pinned';
       if (isCarousel) {

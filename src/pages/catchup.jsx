@@ -822,14 +822,30 @@ function Catchup() {
     },
   );
 
+  const handleArrowKeys = useCallback((e) => {
+    const activeElement = document.activeElement;
+    const isRadio =
+      activeElement?.tagName === 'INPUT' && activeElement.type === 'radio';
+    const isArrowKeys =
+      e.key === 'ArrowDown' ||
+      e.key === 'ArrowUp' ||
+      e.key === 'ArrowLeft' ||
+      e.key === 'ArrowRight';
+    if (isArrowKeys && isRadio) {
+      // Note: page scroll won't trigger on first arrow key press due to this. Subsequent presses will.
+      activeElement.blur();
+      return;
+    }
+  }, []);
+
   return (
     <div
       ref={(node) => {
         scrollableRef.current = node;
-        jRef.current = node;
-        kRef.current = node;
-        hlRef.current = node;
-        escRef.current = node;
+        jRef(node);
+        kRef(node);
+        hlRef(node);
+        escRef(node);
       }}
       id="catchup-page"
       class="deck-container"
@@ -883,7 +899,7 @@ function Catchup() {
             </div>
           </div>
         </header>
-        <main>
+        <main onKeyDown={handleArrowKeys}>
           {uiState === 'start' && (
             <div class="catchup-start">
               <h1>
@@ -1177,6 +1193,7 @@ function Catchup() {
                           href={url}
                           target="_blank"
                           rel="noopener noreferrer"
+                          class="link-block"
                           style={
                             accentColor
                               ? {
@@ -1246,11 +1263,27 @@ function Catchup() {
                                   {sharers.map((s) => {
                                     const { avatarStatic, displayName } = s;
                                     return (
-                                      <Avatar
-                                        url={avatarStatic}
-                                        size="s"
-                                        alt={displayName}
-                                      />
+                                      <button
+                                        type="button"
+                                        class="plain"
+                                        style={{
+                                          padding: 0,
+                                        }}
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          // Reset and filter to author
+                                          const { id } = s;
+                                          setSelectedAuthor(id);
+                                          setSelectedFilterCategory('all');
+                                        }}
+                                      >
+                                        <Avatar
+                                          url={avatarStatic}
+                                          size="s"
+                                          alt={displayName}
+                                        />
+                                      </button>
                                     );
                                   })}
                                 </Trans>
